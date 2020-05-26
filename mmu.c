@@ -4606,7 +4606,7 @@ static int change_EPTrmap_thread1_func(void *arg)
 		time_exec_func2.ept_rmap_time = calc_exec_time(start, end);
 #endif
 
-#if COMPACTION_THREAD_SUM > 3
+#if COMPACTION_THREAD_SUM > 4
 		//up(&arg_thread1->sem_th);
 		//printk("[func1] thread sleep\n");
                 set_current_state(TASK_UNINTERRUPTIBLE);
@@ -4688,7 +4688,7 @@ static int change_EPTentry_thread2_func(void *arg)
 	struct arg_EPTentry_thread2_t *arg_thread2;
 	static struct arg_EPTentry_thread1_t arg_EPTentry_thread1;
 	int new_level, old_level;
-#if COMPACTION_THREAD_SUM > 3
+#if COMPACTION_THREAD_SUM > 4
 	static struct task_struct *EPTrmap_kthread = NULL;
 #endif
 	int i;
@@ -4740,7 +4740,7 @@ static int change_EPTentry_thread2_func(void *arg)
 		arg_EPTentry_thread1.new_spte = new_spte;
 		arg_EPTentry_thread1.old_spte = old_spte;
 		sema_init(&arg_EPTentry_thread1.sem_th, 0);
-#if COMPACTION_THREAD_SUM > 3
+#if COMPACTION_THREAD_SUM > 4
 		if (!EPTrmap_kthread) {
 			EPTrmap_kthread = kthread_run(change_EPTrmap_thread1_func,
 					&arg_EPTentry_thread1, "EPTrmap_kth");
@@ -4757,7 +4757,7 @@ static int change_EPTentry_thread2_func(void *arg)
 #endif
 		change_EPTentry_thread1_func((void *)&arg_EPTentry_thread1);
 
-#if COMPACTION_THREAD_SUM > 3
+#if COMPACTION_THREAD_SUM > 4
 		down(&arg_EPTentry_thread1.sem_th);
 		//printk("[func2] thread end\n");
 #endif
@@ -4857,6 +4857,8 @@ int change_copy_entry_naoki(struct kvm_vcpu *vcpu,
         }
 	
 	sema_init(&sem_page_num, 0);
+	sema_init(&sem_vmm_th1, 0);
+	sema_init(&sem_vmm_th2, 0);
 	arg_EPTentry_thread2.mm = mm;
 	arg_EPTentry_thread2.vcpu = vcpu;
 	arg_EPTentry_thread2.new_gfn = new_gfn;

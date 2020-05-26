@@ -24,6 +24,10 @@ EXPORT_SYMBOL(time_exec_func2);
 //EXPORT_SYMBOL(sem_change_PT_and_EPT_entry);
 struct semaphore sem_page_num;
 EXPORT_SYMBOL(sem_page_num);
+struct semaphore sem_vmm_th1;
+EXPORT_SYMBOL(sem_vmm_th1);
+struct semaphore sem_vmm_th2;
+EXPORT_SYMBOL(sem_vmm_th2);
 
 static pte_t *walk_page_table(struct mm_struct *, unsigned long, pmd_t **);
 static void isolated_lru_page(struct page *);
@@ -696,6 +700,7 @@ static int change_PTrmap_thread1_func(void *arg)
 				migrate_page_state_naoki(new_page, old_page);
 			unlock_page(new_page);
 			unlock_page(old_page);
+//			up(&sem_vmm_th1);
 		}
 
 		up(&arg_thread1->sem_th);
@@ -788,6 +793,7 @@ static int change_PTentry_thread1_func(void *arg)
 				//free_page_and_swap_cache(new_page);
 			}
 		}
+//		up(&sem_vmm_th2);
 	}		
 #ifdef TIME_HYPERCALL_COMPACTION
 	getnstimeofday64(&end);
@@ -797,45 +803,89 @@ static int change_PTentry_thread1_func(void *arg)
 	return 0;
 }
 
-void change_PTentry_thread2_func(unsigned long *new_hva,
-		unsigned long *old_hva, unsigned long page_num)
+static int update_PTentry_thread1_func(void *arg)
 {
-	static pte_t **new_pte, **old_pte;
-	static int bInit = 1;
-	pmd_t *new_pmd, *old_pmd;
-#if COMPACTION_THREAD_SUM > 2
-	static struct task_struct *PTrmap_kth = NULL;
-#endif
-	static struct arg_PTentry_thread1_t arg_PTentry_thread1;
-	//struct page *new_page, *old_page;
-	struct mm_struct *mm = current->mm;
+	static struct arg_PTentry_thread1_t *arg_thread1;
+	struct mm_struct *mm;
 	struct vm_area_struct *new_vma, *old_vma;
+	unsigned long *new_hva, *old_hva;
+	pmd_t *new_pmd, *old_pmd;
+	pte_t *new_pte, *old_pte;
+	int page_num;
 	int i;
 #ifdef TIME_HYPERCALL_COMPACTION
 	struct timespec64 start, end;
-	struct timespec64 start2, end2;
+#endif
+
+	arg_thread1 = (struct arg_PTentry_thread1_t *)arg;
+	while (1) {
+#ifdef TIME_HYPERCALL_COMPACTION
+		getnstimeofday64(&start);
+#endif
+		current->mm = arg_thread1->mm;
+		new_hva = arg_thread1->new_hva;
+		old_hva = arg_thread1->old_hva;
+		page_num = arg_thread1->page_num;
+		mm = current->mm;
+
+		for (i = 0; i < page_num; i++) {
+			struct page *new_page = NULL;
+			pte_t _pte;
+
+			new_pte = walk_page_table(mm, new_hva[i], &new_pmd);
+			old_pte = walk_page_table(mm, old_hva[i], &old_pmd);
+			_pte = *old_pte;
+
+			down(&sem_page_num);
+//			down(&sem_vmm_th1);
+//			down(&sem_vmm_th2);
+			new_vma = find_vma(mm, new_hva[i]);
+			old_vma = find_vma(mm, old_hva[i]);
+			if(!pte_none(*new_pte))
+				new_page = pte_page(*new_pte);
+			pte_clear(new_vma->vm_mm, new_hva[i], new_pte);
+			pte_clear(old_vma->vm_mm, old_hva[i], old_pte);
+			set_pte_at(new_vma->vm_mm, new_hva[i], new_pte, _pte);
+			if (new_page)
+				free_page_and_swap_cache(new_page);
+		}
+
+		up(&arg_thread1->sem_th);
+#ifdef TIME_HYPERCALL_COMPACTION
+		getnstimeofday64(&end);
+		time_exec_func2.vmm_extra_time = calc_exec_time(start, end);
+#endif
+
+#if COMPACTION_THREAD_SUM > 3
+		set_current_state(TASK_UNINTERRUPTIBLE);
+		schedule();
+#else
+		return 0;
+#endif
+	}
+	return 0;
+}
+
+
+void change_PTentry_thread2_func(unsigned long *new_hva,
+		unsigned long *old_hva, unsigned long page_num)
+{
+#if COMPACTION_THREAD_SUM > 2
+	static struct task_struct *PTrmap_kth = NULL;
+#endif
+#if COMPACTION_THREAD_SUM > 3
+	static struct task_struct *PTentry_kth = NULL;
+#endif
+	static struct arg_PTentry_thread1_t arg_PTentry_thread1;
+	static struct arg_PTentry_thread1_t arg_PTentry_thread2;
+	//struct page *new_page, *old_page;
+#ifdef TIME_HYPERCALL_COMPACTION
+	struct timespec64 start, end;
 #endif
 
 #ifdef TIME_HYPERCALL_COMPACTION
 	getnstimeofday64(&start);
 #endif
-	if (bInit) {
-		new_pte = (pte_t **)vmalloc(sizeof(pte_t *) * page_num);
-		old_pte = (pte_t **)vmalloc(sizeof(pte_t *) * page_num);
-		if (new_pte == NULL || old_pte == NULL) {
-			printk("!vmalloc pte\n");
-			return;
-		}
-		bInit = 0;
-	}
-	for (i = 0; i < page_num; i++) {
-		new_pte[i] = walk_page_table(mm, new_hva[i], &new_pmd);
-        	old_pte[i] = walk_page_table(mm, old_hva[i], &old_pmd);
-		//new_page = pte_page(*new_pte[i]);
-		//old_page = pte_page(*old_pte[i]);
-		//lock_page(new_page);
-		//lock_page(old_page);
-	}
 	
 	arg_PTentry_thread1.mm = current->mm;
 	arg_PTentry_thread1.new_hva = new_hva;
@@ -858,31 +908,33 @@ void change_PTentry_thread2_func(unsigned long *new_hva,
 #else
 	change_PTrmap_thread1_func((void *)&arg_PTentry_thread1);
 #endif
-	change_PTentry_thread1_func((void *)&arg_PTentry_thread1);
-	down(&arg_PTentry_thread1.sem_th);
 
-#ifdef TIME_HYPERCALL_COMPACTION
-	getnstimeofday64(&start2);
-#endif
-	for (i = 0; i < page_num; i++) {
-		struct page *new_page = NULL;
-		pte_t _pte = *old_pte[i];
-		
-		down(&sem_page_num);
-		new_vma = find_vma(mm, new_hva[i]);
-		old_vma = find_vma(mm, old_hva[i]);
-		if (!pte_none(*new_pte[i]))
-			new_page = pte_page(*new_pte[i]);
-		pte_clear(new_vma->vm_mm, new_hva[i], new_pte[i]);
-		pte_clear(old_vma->vm_mm, old_hva[i], old_pte[i]);
-		set_pte_at(new_vma->vm_mm, new_hva[i], new_pte[i], _pte);
-		if (new_page) 
-			free_page_and_swap_cache(new_page);
+	arg_PTentry_thread2.mm = current->mm;
+	arg_PTentry_thread2.new_hva = new_hva;
+	arg_PTentry_thread2.old_hva = old_hva;
+	arg_PTentry_thread2.page_num = page_num;
+	sema_init(&arg_PTentry_thread2.sem_th, 0);
+
+#if COMPACTION_THREAD_SUM > 3
+	if (!PTentry_kth) {
+		PTentry_kth = kthread_run(update_PTentry_thread1_func,
+				&arg_PTentry_thread2, "PTentry_kth");
+		if (IS_ERR(PTentry_kth)) {
+			printk("[vmm] !PTentry_kth run\n");
+			update_PTentry_thread1_func((void *)&arg_PTentry_thread2);
+		}
+	} else {
+		wake_up_process(PTentry_kth);
 	}
-#ifdef TIME_HYPERCALL_COMPACTION
-	getnstimeofday64(&end2);
-	time_exec_func2.vmm_extra_time = calc_exec_time(start2, end2);
 #endif
+
+	change_PTentry_thread1_func((void *)&arg_PTentry_thread1);
+#if COMPACTION_THREAD_SUM <= 3
+	update_PTentry_thread1_func((void *)&arg_PTentry_thread2);
+#endif
+
+	down(&arg_PTentry_thread1.sem_th);
+	down(&arg_PTentry_thread2.sem_th);
 
 	//down(&sem_change_PT_and_EPT_entry);
 #ifdef TIME_HYPERCALL_COMPACTION
