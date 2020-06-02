@@ -4925,6 +4925,149 @@ int change_copy_entry_naoki(struct kvm_vcpu *vcpu,
 	return 0;
 }
 
+
+//=============================================================
+// thread single entry proc
+//=============================================================
+#define MAX_CHANGE_ENTRY_NUM 512
+
+static int init_vmalloc_gfnArray(gfn_t **new_gfn, gfn_t **old_gfn)
+{
+	static int bInit = 1;
+
+	if (bInit) {
+		*new_gfn = 
+			(gfn_t *)vmalloc(sizeof(gfn_t) * MAX_CHANGE_ENTRY_NUM);
+		*old_gfn = 
+			(gfn_t *)vmalloc(sizeof(gfn_t) * MAX_CHANGE_ENTRY_NUM);
+		bInit = 0;
+	}
+
+	if (!*new_gfn) {
+		printk("[KVM] !vmalloc new_gfn == NULL\n")
+		return -1;
+	}
+	if (!*old_gfn) {
+		printk("[KVM] !vmalloc old_gfn == NULL\n")
+		return -1;
+	}
+
+	return 0;
+}
+
+static void set_gfnArray_from_physMem(struct kvm_vcpu *vcpu,
+		gfn_t *gfnArray, unsigned long arrayAddress,
+		unsigned long page_num)
+{
+	unsigned long array_gfn, array_offset;
+
+	array_gfn = arrayAddress >> PAGE_SHIFT;
+	array_offset = arrayAddress - (array_gfn << PAGE_SHIFT);
+
+	if (array_offset == 0) {
+		read_hypercall_array(vcpu, array_gfn, array_offset,
+								gfnArray, page_num);
+	} else {
+		int pivot = (PAGE_SIZE - array_offset) / sizeof(long);
+		printk("[KVM] offset over pivot:%d\n", pivot);
+		read_hypercall_array(vcpu, array_gfn, array_offset,
+								gfnArray, page_num);
+		if (page_num > pivot)
+			read_hypercall_array(vcpu, array_gfn, array_offset,
+									gfnArray, page_num - pivot);
+	}
+}
+
+static int change_single_copy_entry(struct kvm_vcpu *vcpu,
+		struct mm_struct *mm,
+		gfn_t new_gfn, gfn_t old_gfn)
+{
+		u64 *new_sptep, *old_sptep;
+		int new_level, old_level;
+		int rmap_count;
+		u64 move_spte;
+		struct kvm_memory_slot *slot;
+		unsigned long new_hva, old_hva;
+
+		current->mm = mm;
+		new_sptep = walk_EPTentry(vcpu, new_gfn, &new_level);
+		old_sptep = walk_EPTentry(vcpu, old_gfn, &old_level);
+
+		slot = kvm_vcpu_gfn_to_memslot(vcpu, new_gfn);
+		new_hva = slot->userspace_addr
+					+ (new_gfn - slot->base_gfn) * PAGE_SIZE;
+		slot = kvm_vcpu_gfn_to_memslot(vcpu, old_gfn);
+		old_hva = slot->userspace_addr
+					+ (old_gfn - slot->base_gfn) * PAGE_SIZE;
+
+		if (!is_shadow_present_pte(*old_sptep)) {
+			kvm_pgfn_t new_pfn, old_pfn;
+
+			new_pfn = my_gfn_to_pfn(new_gfn, vcpu);
+			old_pfn = my_gfn_to_pfn(old_gfn, vcpu);
+
+			if (is_shadow_present_pte(*new_sptep)) {
+				move_spte = *new_sptep;
+				move_spte = move_spte - (new_pfn << PAGE_SHIFT)
+					+ (old_pfn << PAGE_SHIFT);
+			} else {
+				printk("[EPT] new_sptep & old_sptep not present\n");
+			}
+		} else {
+			move_spte = *old_sptep;
+			drop_spte(vcpu->kvm, old_sptep);
+		}
+
+		if (is_shadow_present_pte(*new_sptep))
+			drop_spte(vcpu->kvm, new_sptep);
+
+		mmu_spte_update(new_sptep[i], move_spte);
+		if (is_shadow_present_pte(*new_sptep)) {
+			rmap_count = rmap_add(vcpu, new_sptep, new_gfn);
+			if (rmap_count > RMAP_RECYCLE_THRESHOLD)
+				rmap_recycle(vcpu, new_sptep, new_gfn);
+		}
+
+		change_single_PTentry(new_hva, old_hva);
+
+		return 0;
+}
+
+int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
+		unsigned long newArray, unsigned long oldArray,
+		unsigned long page_num)
+{
+	struct mm_struct *mm = current->mm;
+	static gfn_t *new_gfn = NULL, *old_gfn = NULL;
+	unsigned long array_gfn, array_offset;
+	int i;
+	
+	if (page_num > MAX_CHANGE_ENTRY_NUM) {
+		printk("[KVM] err: page_num > %d\n", MAX_CHANGE_ENTRY_NUM);
+		return -1;
+	}
+
+	if (init_vmalloc_gfnArray(&new_gfn, &old_gfn)) {
+		printk("[KVM] !init_vmalloc_gfnArray\n");
+		return -1;
+	}
+
+	down_write(&mm->mmap_sem);
+	spin_lock(&vcpu->kvm->mmu_lock);
+
+	set_gfnArray_from_physMem(vcpu, old_gfn, oldArray, page_num);
+	set_gfnArray_from_physMem(vcpu, new_gfn, newArray, page_num);
+
+	for (i = 0; i < page_num; i++) {
+		change_single_copy_entry(vcpu, new_gfn[i], old_gfn[i]);
+	}
+	kvm_flush_remote_tlbs(vcpu->kvm);
+
+	spin_unlock(&vcpu->kvm->mmu_lock);
+	up_write(&mm->mmap_sem);
+	return 0;
+}
+
 void mmu_foo_naoki(void)
 {
         int i;
