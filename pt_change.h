@@ -47,10 +47,14 @@ struct time_exec_func2_t {
 extern struct time_exec_func2_t time_exec_func2;
 #endif
 
-#define COMPACTION_THREAD_SUM 4
+#define COMPACTION_THREAD_SUM 1
 extern struct semaphore sem_change_PT_and_EPT_entry;
 extern struct semaphore sem_page_num;
 void change_PTentry_thread2_func(unsigned long *new_hva,
                 unsigned long *old_hva, unsigned long page_num);
+extern struct semaphore sem_vmm_th1;
+extern struct semaphore sem_vmm_th2;
+
+void change_single_PTentry(unsigned long new_hva, unsigned long old_hva);
 
 #endif

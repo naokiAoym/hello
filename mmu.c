@@ -4944,11 +4944,11 @@ static int init_vmalloc_gfnArray(gfn_t **new_gfn, gfn_t **old_gfn)
 	}
 
 	if (!*new_gfn) {
-		printk("[KVM] !vmalloc new_gfn == NULL\n")
+		printk("[KVM] !vmalloc new_gfn == NULL\n");
 		return -1;
 	}
 	if (!*old_gfn) {
-		printk("[KVM] !vmalloc old_gfn == NULL\n")
+		printk("[KVM] !vmalloc old_gfn == NULL\n");
 		return -1;
 	}
 
@@ -4979,17 +4979,15 @@ static void set_gfnArray_from_physMem(struct kvm_vcpu *vcpu,
 }
 
 static int change_single_copy_entry(struct kvm_vcpu *vcpu,
-		struct mm_struct *mm,
 		gfn_t new_gfn, gfn_t old_gfn)
 {
 		u64 *new_sptep, *old_sptep;
 		int new_level, old_level;
 		int rmap_count;
-		u64 move_spte;
+		u64 move_spte = 0;
 		struct kvm_memory_slot *slot;
 		unsigned long new_hva, old_hva;
 
-		current->mm = mm;
 		new_sptep = walk_EPTentry(vcpu, new_gfn, &new_level);
 		old_sptep = walk_EPTentry(vcpu, old_gfn, &old_level);
 
@@ -5001,7 +4999,7 @@ static int change_single_copy_entry(struct kvm_vcpu *vcpu,
 					+ (old_gfn - slot->base_gfn) * PAGE_SIZE;
 
 		if (!is_shadow_present_pte(*old_sptep)) {
-			kvm_pgfn_t new_pfn, old_pfn;
+			kvm_pfn_t new_pfn, old_pfn;
 
 			new_pfn = my_gfn_to_pfn(new_gfn, vcpu);
 			old_pfn = my_gfn_to_pfn(old_gfn, vcpu);
@@ -5021,7 +5019,7 @@ static int change_single_copy_entry(struct kvm_vcpu *vcpu,
 		if (is_shadow_present_pte(*new_sptep))
 			drop_spte(vcpu->kvm, new_sptep);
 
-		mmu_spte_update(new_sptep[i], move_spte);
+		mmu_spte_update(new_sptep, move_spte);
 		if (is_shadow_present_pte(*new_sptep)) {
 			rmap_count = rmap_add(vcpu, new_sptep, new_gfn);
 			if (rmap_count > RMAP_RECYCLE_THRESHOLD)
@@ -5039,7 +5037,6 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 {
 	struct mm_struct *mm = current->mm;
 	static gfn_t *new_gfn = NULL, *old_gfn = NULL;
-	unsigned long array_gfn, array_offset;
 	int i;
 	
 	if (page_num > MAX_CHANGE_ENTRY_NUM) {

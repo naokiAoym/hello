@@ -6904,6 +6904,9 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 	case KVM_HC_MYCALL_THGROUP_COMP:
 		ret = change_copy_entry_naoki(vcpu, a0, a1, a2);
 		break;
+	case KVM_HC_MYCALL_SINGLE_COMP:
+		ret = change_copy_entry_each_naoki(vcpu, a0, a1, a2);
+		break;
 	case KVM_HC_MYCALL_PFCHECK:
 		//ret = change_twoEntry_naoki(vcpu, a0, a1);
 		ret = -1;

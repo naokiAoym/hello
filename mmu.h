@@ -235,5 +235,8 @@ void mmu_foo_naoki(void);
 int change_copy_entry_naoki(struct kvm_vcpu *vcpu,
                 unsigned long newArray, unsigned long oldArray,
                 unsigned long page_num);
+int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
+		                unsigned long newArray, unsigned long oldArray,
+				unsigned long page_num);
 
 #endif

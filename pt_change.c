@@ -946,7 +946,7 @@ void change_PTentry_thread2_func(unsigned long *new_hva,
 }
 EXPORT_SYMBOL(change_PTentry_thread2_func);
 
-void change_single_PTentry(unsinged long new_hva, unsigned long old_hva)
+void change_single_PTentry(unsigned long new_hva, unsigned long old_hva)
 {
 	struct mm_struct *mm;
 	struct vm_area_struct *new_vma, *old_vma;
@@ -967,6 +967,7 @@ void change_single_PTentry(unsinged long new_hva, unsigned long old_hva)
 	lock_page(old_page);
 	new_vma = find_vma(mm, new_hva);
 	old_vma = find_vma(mm, old_hva);
+	_pte = *old_pte;
 
 	if (old_page->mapping !=
 				(struct address_space *)(new_vma->anon_vma)) {
