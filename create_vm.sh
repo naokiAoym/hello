@@ -11,5 +11,5 @@ virt-install \
 	--graphics none \
 	--network bridge=virbr0 \
 	--console pty,target_type=serial \
-	--extra-args='console=ttyS0,115200n8 serial'
+	--extra-args 'console=ttyS0,115200n8 serial'
 
