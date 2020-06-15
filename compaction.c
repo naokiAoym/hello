@@ -576,7 +576,6 @@ isolate_fail:
 
 /**
  * isolate_freepages_range() - isolate free pages.
- * @cc:        Compaction control structure.
  * @start_pfn: The first PFN to start isolating.
  * @end_pfn:   The one-past-last PFN.
  *
@@ -1166,7 +1165,8 @@ static void isolate_freepages(struct compact_control *cc)
  * from the isolated freelists in the block we are migrating to.
  */
 static struct page *compaction_alloc(struct page *migratepage,
-					unsigned long data)
+					unsigned long data,
+					int **result)
 {
 	struct compact_control *cc = (struct compact_control *)data;
 	struct page *freepage;
@@ -1592,6 +1592,13 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 
 	while ((ret = compact_finished(zone, cc)) == COMPACT_CONTINUE) {
 		int err;
+		struct page *page, *page2;
+		int mnum = 0;
+		//static int mnum_sum = 0, buf_sum = 0;
+		int use_batch_compaction = 0;
+		//unsigned long long compact_time;
+		//struct timespec64 start, end;
+		int i;
 
 		switch (isolate_migratepages(zone, cc)) {
 		case ISOLATE_ABORT:
@@ -1609,10 +1616,39 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 		case ISOLATE_SUCCESS:
 			;
 		}
-
-		err = migrate_pages(&cc->migratepages, compaction_alloc,
+list_for_each_entry_safe(page, page2, &cc->migratepages, lru) {
+		//	printk("migrate page:%p\n", page);
+			mnum++;
+		}
+		//mnum_sum += mnum;
+		//printk("[compaction] page compaction (%d), sum:%d\n",
+		//		mnum, mnum_sum);
+/*		if ((mnum_sum / 10000) != buf_sum) {
+			printk("[compaction] page compaction (%d), sum:%d\n",
+				mnum, mnum_sum);
+			buf_sum = mnum_sum / 10000;
+		}
+*/
+		use_batch_compaction = 0;
+		//start_mig = rdtsc();
+		//getnstimeofday64(&start);
+		if (use_batch_compaction)
+			err = migrate_pages_batch(&cc->migratepages, 
+				compaction_alloc, compaction_free,
+				(unsigned long)cc, cc->mode,
+				MR_COMPACTION);
+		else
+			err = migrate_pages(&cc->migratepages, compaction_alloc,
 				compaction_free, (unsigned long)cc, cc->mode,
 				MR_COMPACTION);
+		//getnstimeofday64(&end);
+		//end_mig = rdtsc();
+		//compact_time = (end.tv_sec - start.tv_sec) * NSEC_PER_SEC
+		//	+ (end.tv_nsec - start.tv_nsec);
+		//printk("[compaction] migration(%d):	%lld\n",
+		//			mnum, compact_time);
+
+//		if (err) printk("[compaction] migrate err\n");
 
 		trace_mm_compaction_migratepages(cc->nr_migratepages, err,
 							&cc->migratepages);
@@ -1899,7 +1935,7 @@ static ssize_t sysfs_compact_node(struct device *dev,
 
 	return count;
 }
-static DEVICE_ATTR(compact, 0200, NULL, sysfs_compact_node);
+static DEVICE_ATTR(compact, S_IWUSR, NULL, sysfs_compact_node);
 
 int compaction_register_node(struct node *node)
 {
@@ -1987,14 +2023,6 @@ static void kcompactd_do_work(pg_data_t *pgdat)
 		if (status == COMPACT_SUCCESS) {
 			compaction_defer_reset(zone, cc.order, false);
 		} else if (status == COMPACT_PARTIAL_SKIPPED || status == COMPACT_COMPLETE) {
-			/*
-			 * Buddy pages may become stranded on pcps that could
-			 * otherwise coalesce on the zone's free area for
-			 * order >= cc.order.  This is ratelimited by the
-			 * upcoming deferral.
-			 */
-			drain_all_pages(zone);
-
 			/*
 			 * We use sync migration mode here, so we defer like
 			 * sync direct compaction does.
