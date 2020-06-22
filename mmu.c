@@ -5031,6 +5031,36 @@ static int change_single_copy_entry(struct kvm_vcpu *vcpu,
 		return 0;
 }
 
+struct arg_migPages_info_t {
+	struct mm_struct *mm;
+	struct kvm_vcpu *vcpu;
+	gfn_t *new_gfn;
+	gfn_t *old_gfn;
+	int page_num;
+}
+
+static int func_change_entry_each_th (void *arg)
+{
+	struct kvm_vcpu *vcpu;
+	gfn_t *new_gfn, *old_gfn;
+	int page_num;
+	struct arg_migPages_info_t arg_migPages_info;
+	int i;
+
+	arg_migPages_info = (struct arg_migPages_info *)arg;
+	current->mm = mm;
+	vcpu = arg_migPages_info.vcpu;
+	new_gfn = arg_migPages_info.new_gfn;
+	old_gfn = arg_migPages_info.old_gfn;
+	page_num = arg_migPages_info.page_num;
+
+	for (i = 0; i < page_num; i++) {
+		change_single_copy_entry(vcpu, new_gfn[i], old_gfn[i]);
+	}
+
+	return 0;
+}
+
 int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 		unsigned long newArray, unsigned long oldArray,
 		unsigned long page_num)
@@ -5038,6 +5068,9 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 	struct mm_struct *mm = current->mm;
 	static gfn_t *new_gfn = NULL, *old_gfn = NULL;
 	int i;
+	struct task_struct **entry_kth = NULL;
+	struct arg_migPages_info_t *arg_migPages_info;
+	const int THREAD_NUM = 1;
 	
 	if (page_num > MAX_CHANGE_ENTRY_NUM) {
 		printk("[KVM] err: page_num > %d\n", MAX_CHANGE_ENTRY_NUM);
@@ -5049,19 +5082,58 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 		return -1;
 	}
 
+	entry_kth =
+		(struct task_struct **)vmalloc(sizeof(struct task_struct *) * THREAD_NUM);
+	if (entry_kth == NULL) {
+		printk("[KVM] !vmalloc entry_kth\n");
+		return -1;
+	}
+	for (i = 0; i < THREAD_NUM; i++)
+		entry_kth[i] = NULL;
+
+	arg_migPages_info = 
+		(struct arg_migPages_info_t *)vmalloc(sizeof(struct arg_migPages_info_t) * THREAD_NUM);
+	if (arg_migPages_info == NULL) {
+		printk("[KVM] !vmalloc arg_migPages_info\n");
+		return -1;
+	}
+
 	down_write(&mm->mmap_sem);
 	spin_lock(&vcpu->kvm->mmu_lock);
 
 	set_gfnArray_from_physMem(vcpu, old_gfn, oldArray, page_num);
 	set_gfnArray_from_physMem(vcpu, new_gfn, newArray, page_num);
 
-	for (i = 0; i < page_num; i++) {
-		change_single_copy_entry(vcpu, new_gfn[i], old_gfn[i]);
+	for (i = 0; i < THREAD_NUM; i++) {
+		int pivot  = page_num / THREAD_NUM;
+		arg_migPages_info[i].mm = mm;
+		arg_migPages_info[i].vcpu = vcpu;
+		arg_migPages_info[i].new_gfn = &new_gfn[pivot * i];
+		arg_migPages_info[i].old_gfn = &old_gfn[pivot * i];
+		arg_migPages_info[i].page_num = pivot;
+		if (i == THREAD_NUM - 1)
+			arg_migPages_info[i].page_num += page_num % THREAD_NUM;
+		if (!entry_kth[i]) {
+			entry_kth[i] = kthread_run(func_change_entry_each_th,
+							&arg_migPages_info[i], "EPTentry_kth");
+			if (IS_ERR(entry_kth[i])) {
+				int j;
+				printk("[KVM] !EPTentry_kth run\n");
+				for (j = 0; j < arg_migPages_info.page_num; j++) {
+					change_single_copy_entry(vcpu,
+							arg_migPages_info.new_gfn[j],
+							arg_migPages_info.old_gfn[j]);
+				}
+			}
+		}
 	}
 	kvm_flush_remote_tlbs(vcpu->kvm);
 
 	spin_unlock(&vcpu->kvm->mmu_lock);
 	up_write(&mm->mmap_sem);
+
+	vfree(entry_kth);
+	vfree(arg_migPages_info);
 	return 0;
 }
 
