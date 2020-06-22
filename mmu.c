@@ -5037,6 +5037,7 @@ struct arg_migPages_info_t {
 	gfn_t *new_gfn;
 	gfn_t *old_gfn;
 	int page_num;
+	struct semaphore sem_th;
 };
 
 static int func_change_entry_each_th (void *arg)
@@ -5047,7 +5048,7 @@ static int func_change_entry_each_th (void *arg)
 	struct arg_migPages_info_t *arg_migPages_info;
 	int i;
 
-	arg_migPages_info = (struct arg_migPages_info *)arg;
+	arg_migPages_info = (struct arg_migPages_info_t *)arg;
 	current->mm = arg_migPages_info->mm;
 	vcpu = arg_migPages_info->vcpu;
 	new_gfn = arg_migPages_info->new_gfn;
@@ -5058,6 +5059,7 @@ static int func_change_entry_each_th (void *arg)
 		change_single_copy_entry(vcpu, new_gfn[i], old_gfn[i]);
 	}
 
+	up(&arg_migPages_info->sem_th);
 	return 0;
 }
 
@@ -5113,6 +5115,10 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 		arg_migPages_info[i].page_num = pivot;
 		if (i == THREAD_NUM - 1)
 			arg_migPages_info[i].page_num += page_num % THREAD_NUM;
+		 printk("[KVM] kth[%d] page_num=%d\n",
+                            i, arg_migPages_info[i].page_num);
+		sema_init(&arg_migPages_info[i].sem_th, 0);
+
 		if (!entry_kth[i]) {
 			entry_kth[i] = kthread_run(func_change_entry_each_th,
 							&arg_migPages_info[i], "EPTentry_kth");
@@ -5127,6 +5133,9 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 			}
 		}
 	}
+
+	for (i = 0; i < THREAD_NUM; i++) 
+		down(&arg_migPages_info[i].sem_th);
 	kvm_flush_remote_tlbs(vcpu->kvm);
 
 	spin_unlock(&vcpu->kvm->mmu_lock);
