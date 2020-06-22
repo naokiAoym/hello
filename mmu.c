@@ -5037,22 +5037,22 @@ struct arg_migPages_info_t {
 	gfn_t *new_gfn;
 	gfn_t *old_gfn;
 	int page_num;
-}
+};
 
 static int func_change_entry_each_th (void *arg)
 {
 	struct kvm_vcpu *vcpu;
 	gfn_t *new_gfn, *old_gfn;
 	int page_num;
-	struct arg_migPages_info_t arg_migPages_info;
+	struct arg_migPages_info_t *arg_migPages_info;
 	int i;
 
 	arg_migPages_info = (struct arg_migPages_info *)arg;
-	current->mm = mm;
-	vcpu = arg_migPages_info.vcpu;
-	new_gfn = arg_migPages_info.new_gfn;
-	old_gfn = arg_migPages_info.old_gfn;
-	page_num = arg_migPages_info.page_num;
+	current->mm = arg_migPages_info->mm;
+	vcpu = arg_migPages_info->vcpu;
+	new_gfn = arg_migPages_info->new_gfn;
+	old_gfn = arg_migPages_info->old_gfn;
+	page_num = arg_migPages_info->page_num;
 
 	for (i = 0; i < page_num; i++) {
 		change_single_copy_entry(vcpu, new_gfn[i], old_gfn[i]);
@@ -5119,10 +5119,10 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 			if (IS_ERR(entry_kth[i])) {
 				int j;
 				printk("[KVM] !EPTentry_kth run\n");
-				for (j = 0; j < arg_migPages_info.page_num; j++) {
+				for (j = 0; j < arg_migPages_info[i].page_num; j++) {
 					change_single_copy_entry(vcpu,
-							arg_migPages_info.new_gfn[j],
-							arg_migPages_info.old_gfn[j]);
+							arg_migPages_info[i].new_gfn[j],
+							arg_migPages_info[i].old_gfn[j]);
 				}
 			}
 		}
