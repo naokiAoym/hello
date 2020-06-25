@@ -5040,6 +5040,7 @@ struct arg_migPages_info_t {
 	gfn_t *old_gfn;
 	int page_num;
 	struct semaphore sem_th;
+	int thread_no;
 };
 
 static int func_change_entry_each_th (void *arg)
@@ -5049,9 +5050,18 @@ static int func_change_entry_each_th (void *arg)
 	int page_num;
 	struct arg_migPages_info_t *arg_migPages_info;
 	int i;
-
+#ifdef TIME_HYPERCALL_COMPACTION
+	struct timespec64 start, end;
+	unsigned long exec_time;
+	int thread_no;
+#endif
+	
 	arg_migPages_info = (struct arg_migPages_info_t *)arg;
+	thread_no = arg_migPages_info->thread_no;
 	while (1) {
+#ifdef TIME_HYPERCALL_COMPACTION
+		getnstimeofday64(&start);
+#endif
 		current->mm = arg_migPages_info->mm;
 		vcpu = arg_migPages_info->vcpu;
 		new_gfn = arg_migPages_info->new_gfn;
@@ -5063,6 +5073,11 @@ static int func_change_entry_each_th (void *arg)
 		}
 
 		up(&arg_migPages_info->sem_th);
+#ifdef TIME_HYPERCALL_COMPACTION
+		getnstimeofday64(&end);
+		printk("[kvm] (%d) thread[%d]:%ld\n",
+					page_num, thread_no, calc_exec_time(start, end));	
+#endif
 
 		set_current_state(TASK_UNINTERRUPTIBLE);
 		schedule();
@@ -5081,6 +5096,12 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 	static struct arg_migPages_info_t *arg_migPages_info;
 	const int THREAD_NUM = 4;
 	static int bInit = 1;
+#ifdef TIME_HYPERCALL_COMPACTION
+	struct timespec64 start, end;
+	unsigned long exec_time;
+
+	getnstimeofday64(&start);
+#endif
 	
 	if (page_num > MAX_CHANGE_ENTRY_NUM) {
 		printk("[KVM] err: page_num > %d\n", MAX_CHANGE_ENTRY_NUM);
@@ -5124,10 +5145,9 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 		arg_migPages_info[i].new_gfn = &new_gfn[pivot * i];
 		arg_migPages_info[i].old_gfn = &old_gfn[pivot * i];
 		arg_migPages_info[i].page_num = pivot;
+		arg_migPages_info[i].thread_no = i;
 		if (i == THREAD_NUM - 1)
 			arg_migPages_info[i].page_num += page_num % THREAD_NUM;
-		 printk("[KVM] kth[%d] page_num=%d(%ld)\n",
-                            i, arg_migPages_info[i].page_num, page_num);
 		sema_init(&arg_migPages_info[i].sem_th, 0);
 
 		if (!entry_kth[i]) {
@@ -5155,6 +5175,12 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 
 	spin_unlock(&vcpu->kvm->mmu_lock);
 	up_write(&mm->mmap_sem);
+
+#ifdef TIME_HYPERCALL_COMPACTION
+	getnstimeofday64(&end);
+	printk("[kvm] (%d) exec_time:%d\n",
+					page_num, calc_exec_time(start, end));
+#endif
 
 	return 0;
 }
