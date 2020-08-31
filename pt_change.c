@@ -963,8 +963,8 @@ void change_single_PTentry(unsigned long new_hva, unsigned long old_hva)
 	old_pte_ptl = pte_lockptr(mm, old_pmd);
 	new_page = pte_page(*new_pte);
 	old_page = pte_page(*old_pte);
-	lock_page(new_page);
-	lock_page(old_page);
+//	lock_page(new_page);
+//	lock_page(old_page);
 	new_vma = find_vma(mm, new_hva);
 	old_vma = find_vma(mm, old_hva);
 	_pte = *old_pte;
@@ -976,10 +976,10 @@ void change_single_PTentry(unsigned long new_hva, unsigned long old_hva)
 		old_page->index = linear_page_index(new_vma, new_hva);
 		if (PageSwapBacked(new_page))
 			SetPageSwapBacked(old_page);
-		spin_lock(old_pte_ptl);
+//		spin_lock(old_pte_ptl);
 		page_remove_rmap(old_page, false);
 		page_add_anon_rmap(old_page, new_vma, new_hva, false);
-		spin_unlock(old_pte_ptl);
+//		spin_unlock(old_pte_ptl);
 	} else {
 		migrate_page_state_naoki(new_page, old_page);
 	}
@@ -1009,33 +1009,33 @@ void change_single_PTentry(unsigned long new_hva, unsigned long old_hva)
        	}
 
 		if (bFree_new_page) {
-			spin_lock(new_pte_ptl);
+//			spin_lock(new_pte_ptl);
 			isolated_lru_page(new_page);
-			spin_unlock(new_pte_ptl);
+//			spin_unlock(new_pte_ptl);
 
 			lru_cache_add(new_page);
 			put_page(new_page);
 
-			spin_lock(new_pte_ptl);
+//			spin_lock(new_pte_ptl);
 			//pte_clear(new_vma->vm_mm, new_hva[i], new_pte);
 			page_remove_rmap(new_page, false);
-			spin_unlock(new_pte_ptl);
+//			spin_unlock(new_pte_ptl);
 			atomic_long_dec(&mm->rss_stat.count[MM_ANONPAGES]);
 			//free_page_and_swap_cache(new_page);
 		}
 	}
 
-	spin_lock(new_pte_ptl);
-	spin_lock(old_pte_ptl);
+//	spin_lock(new_pte_ptl);
+//	spin_lock(old_pte_ptl);
 	pte_clear(new_vma->vm_mm, new_hva, new_pte);
 	pte_clear(old_vma->vm_mm, old_hva, old_pte);
 	set_pte_at(new_vma->vm_mm, new_hva, new_pte, _pte);
 	update_mmu_cache(new_vma, new_hva, new_pte);
-	spin_unlock(old_pte_ptl);
-	spin_unlock(new_pte_ptl);
+//	spin_unlock(old_pte_ptl);
+//	spin_unlock(new_pte_ptl);
 
-	unlock_page(old_page);
-	unlock_page(new_page);
+//	unlock_page(old_page);
+//	unlock_page(new_page);
 	free_page_and_swap_cache(new_page);
 	return;
 }
@@ -1095,6 +1095,44 @@ unsigned long walk_hva_to_pfn(unsigned long hva) {
 }
 EXPORT_SYMBOL(walk_hva_to_pfn);
 
+void myDBG_oldpage(unsigned long old_hva)
+{
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *old_vma;	
+	pmd_t *old_pmd;
+	pte_t *old_pte;
+	struct page *old_page;
+	spinlock_t *old_pte_ptl;
+
+	old_pte = walk_page_table(mm, old_hva, &old_pmd);
+	old_pte_ptl = pte_lockptr(mm, old_pmd);
+	old_page = pte_page(*old_pte);
+	//lock_page(old_page);
+	old_vma = find_vma(mm, old_hva);
+
+	if (!pte_none(*old_pte)) {
+		if (page_mapped(old_page)
+			&& pte_present(*old_pte)
+			&& !is_zero_pfn(pte_pfn(*old_pte))) {
+			isolated_lru_page(old_page);
+			lru_cache_add(old_page);
+			put_page(old_page);
+			page_remove_rmap(old_page, false);
+			atomic_long_dec(&mm->rss_stat.count[MM_ANONPAGES]);
+			pte_clear(old_vma->vm_mm, old_hva, old_pte);
+			free_page_and_swap_cache(old_page);
+		}
+	}
+}
+EXPORT_SYMBOL(myDBG_oldpage);
+
+void myDBG_foo(void)
+{
+	struct mm_struct *mm;
+	mm = current->mm;
+}
+EXPORT_SYMBOL(myDBG_foo);
+
 static void isolated_lru_page(struct page *page)
 {
 	int ret = -1;
@@ -1104,7 +1142,7 @@ static void isolated_lru_page(struct page *page)
 		struct zone *zone = page_zone(page);
 		struct lruvec *lruvec;
 		
-		spin_lock_irq(zone_lru_lock(zone));
+//		spin_lock_irq(zone_lru_lock(zone));
 		lruvec = mem_cgroup_page_lruvec(page, zone->zone_pgdat);
 		if (PageLRU(page)) {
 			int lru = page_lru(page);
@@ -1113,7 +1151,7 @@ static void isolated_lru_page(struct page *page)
 			del_page_from_lru_list(page, lruvec, lru);
 			ret = 0;
 		}
-		spin_unlock_irq(zone_lru_lock(zone));
+//		spin_unlock_irq(zone_lru_lock(zone));
 	}
 	if (ret)
 		printk("[walk] !clear LRUi flag; page:%lx", page_to_pfn(page));

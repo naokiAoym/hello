@@ -3198,7 +3198,7 @@ static u64 *walk_EPTentry(struct kvm_vcpu *vcpu, gfn_t gfn, int *entry_level)
 			level = 0;
 			break;
 		}
-		spin_lock(&spin_EPTwalk);
+
 		if (!is_shadow_present_pte(*sptep)) {
 			u64 base_addr = addr;
 			gfn_t psedo_gfn;
@@ -3207,12 +3207,14 @@ static u64 *walk_EPTentry(struct kvm_vcpu *vcpu, gfn_t gfn, int *entry_level)
 			//printk("[walk] !is_shadow_present_pte(walk now)\n");
 			base_addr &= PT64_LVL_ADDR_MASK(level);
 			psedo_gfn = base_addr >> PAGE_SHIFT;
-			sp = kvm_mmu_get_page(vcpu, psedo_gfn, addr,
-					level - 1, 1, ACC_ALL);
-
-			link_shadow_page(vcpu, sptep, sp);
+			spin_lock(&spin_EPTwalk);
+			if (!is_shadow_present_pte(*sptep)) {
+				sp = kvm_mmu_get_page(vcpu, psedo_gfn, addr,
+						level - 1, 1, ACC_ALL);
+				link_shadow_page(vcpu, sptep, sp);
+			}
+			spin_unlock(&spin_EPTwalk);
 		}
-		spin_unlock(&spin_EPTwalk);
 
                 shadow_addr = *sptep & PT64_BASE_ADDR_MASK;
                 --level;
@@ -4660,6 +4662,7 @@ static int change_EPTentry_thread1_func(void *arg)
 				mmu_spte_update(new_sptep[i], move_spte);
 			} else {
 				printk("[EPT] new_sptep & old_sptep not present\n");
+				continue;
 			}
 			continue;
 		}
@@ -4987,6 +4990,11 @@ static int change_single_copy_entry(struct kvm_vcpu *vcpu,
 		u64 move_spte = 0;
 		struct kvm_memory_slot *slot;
 		unsigned long new_hva, old_hva;
+#ifdef TIME_HYPERCALL_COMPACTION
+//		struct timespec64 start, mid, end;
+
+//		getnstimeofday64(&start);
+#endif
 
 		new_sptep = walk_EPTentry(vcpu, new_gfn, &new_level);
 		old_sptep = walk_EPTentry(vcpu, old_gfn, &old_level);
@@ -5027,8 +5035,15 @@ static int change_single_copy_entry(struct kvm_vcpu *vcpu,
 			if (rmap_count > RMAP_RECYCLE_THRESHOLD)
 				rmap_recycle(vcpu, new_sptep, new_gfn);
 		}
-
+#ifdef TIME_HYPERCALL_COMPACTION
+//		getnstimeofday64(&mid);
+#endif
 		change_single_PTentry(new_hva, old_hva);
+#ifdef TIME_HYPERCALL_COMPACTION
+//		getnstimeofday64(&end);
+//		printk("[kvm] spte time:	%ld\n", calc_exec_time(start, mid));
+//		printk("[kvm] kpte time:	%ld\n", calc_exec_time(mid, end));
+#endif
 
 		return 0;
 }
@@ -5051,16 +5066,17 @@ static int func_change_entry_each_th (void *arg)
 	struct arg_migPages_info_t *arg_migPages_info;
 	int i;
 #ifdef TIME_HYPERCALL_COMPACTION
-	struct timespec64 start, end;
-	unsigned long exec_time;
+//	struct timespec64 start, end;
 	int thread_no;
 #endif
 	
 	arg_migPages_info = (struct arg_migPages_info_t *)arg;
+#ifdef TIME_HYPERCALL_COMPACTION
 	thread_no = arg_migPages_info->thread_no;
+#endif
 	while (1) {
 #ifdef TIME_HYPERCALL_COMPACTION
-		getnstimeofday64(&start);
+//		getnstimeofday64(&start);
 #endif
 		current->mm = arg_migPages_info->mm;
 		vcpu = arg_migPages_info->vcpu;
@@ -5074,9 +5090,9 @@ static int func_change_entry_each_th (void *arg)
 
 		up(&arg_migPages_info->sem_th);
 #ifdef TIME_HYPERCALL_COMPACTION
-		getnstimeofday64(&end);
-		printk("[kvm] (%d) thread[%d]:%ld\n",
-					page_num, thread_no, calc_exec_time(start, end));	
+//		getnstimeofday64(&end);
+//		printk("[kvm] (%d) thread[%d]:	%ld\n",
+//					page_num, thread_no, calc_exec_time(start, end));	
 #endif
 
 		set_current_state(TASK_UNINTERRUPTIBLE);
@@ -5094,11 +5110,10 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 	int i;
 	static struct task_struct **entry_kth = NULL;
 	static struct arg_migPages_info_t *arg_migPages_info;
-	const int THREAD_NUM = 4;
+	const int THREAD_NUM = 5;
 	static int bInit = 1;
 #ifdef TIME_HYPERCALL_COMPACTION
 	struct timespec64 start, end;
-	unsigned long exec_time;
 
 	getnstimeofday64(&start);
 #endif
@@ -5178,10 +5193,61 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 
 #ifdef TIME_HYPERCALL_COMPACTION
 	getnstimeofday64(&end);
-	printk("[kvm] (%d) exec_time:%d\n",
+	printk("[kvm] (%ld) exec_time:	%ld\n",
 					page_num, calc_exec_time(start, end));
 #endif
 
+	return 0;
+}
+
+int MyHypercall_foo(struct kvm_vcpu *vcpu)
+{
+	struct mm_struct *mm = current->mm;
+
+	down_write(&mm->mmap_sem);
+	spin_lock(&vcpu->kvm->mmu_lock);
+
+	myDBG_foo();
+	kvm_flush_remote_tlbs(vcpu->kvm);
+
+	spin_unlock(&vcpu->kvm->mmu_lock);
+	up_write(&mm->mmap_sem);
+	return 0;
+}
+
+int MyHypercall_TLBflush(struct kvm_vcpu *vcpu)
+{
+	struct mm_struct *mm = current->mm;                                                                             
+	down_write(&mm->mmap_sem);
+	spin_lock(&vcpu->kvm->mmu_lock);                                                                                
+	kvm_flush_remote_tlbs(vcpu->kvm);	
+	spin_unlock(&vcpu->kvm->mmu_lock);
+	up_write(&mm->mmap_sem);
+	return 0;
+}
+
+int MyHypercall_oldpage(struct kvm_vcpu *vcpu, gfn_t old_gfn)
+{
+	struct mm_struct *mm = current->mm;
+	u64 *old_sptep;
+	int level;
+	struct kvm_memory_slot *slot;
+	unsigned long old_hva;
+	
+	down_write(&mm->mmap_sem);
+	spin_lock(&vcpu->kvm->mmu_lock);
+
+	old_sptep = walk_EPTentry(vcpu, old_gfn, &level);
+	slot = kvm_vcpu_gfn_to_memslot(vcpu, old_gfn);
+	old_hva = slot->userspace_addr
+			+ (old_gfn - slot->base_gfn) * PAGE_SIZE;
+	if (is_shadow_present_pte(*old_sptep))
+		drop_spte(vcpu->kvm, old_sptep);
+	myDBG_oldpage(old_hva);
+
+	kvm_flush_remote_tlbs(vcpu->kvm);
+	spin_unlock(&vcpu->kvm->mmu_lock);
+	up_write(&mm->mmap_sem);
 	return 0;
 }
 
@@ -5211,6 +5277,10 @@ static int __direct_map(struct kvm_vcpu *vcpu, int write, int map_writable,
 					       map_writable);
 			direct_pte_prefetch(vcpu, iterator.sptep);
 			++vcpu->stat.pf_fixed;
+			//printf("[kvm] vcpu->stat.pf_fixed:%lld\n", vcpu->stat.pf_fixed);
+			//printf("[kvm] vcpu->stat.pf_guest:%lld\n", vcpu->stat.pf_guest);
+			//printf("[kvm] vcpu->stat.pf_guest:%lld\n", vcpu->stat.tlb_flush);
+			//printf("[kvm] vcpu->stat.invlpg:%lld\n", vcpu->stat.invlpg);
 			break;
 		}
 
