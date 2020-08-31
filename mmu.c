@@ -4990,6 +4990,7 @@ static int change_single_copy_entry(struct kvm_vcpu *vcpu,
 		u64 move_spte = 0;
 		struct kvm_memory_slot *slot;
 		unsigned long new_hva, old_hva;
+		int switch_vmmEntry;
 #ifdef TIME_HYPERCALL_COMPACTION
 //		struct timespec64 start, mid, end;
 
@@ -5038,7 +5039,11 @@ static int change_single_copy_entry(struct kvm_vcpu *vcpu,
 #ifdef TIME_HYPERCALL_COMPACTION
 //		getnstimeofday64(&mid);
 #endif
-		change_single_PTentry(new_hva, old_hva);
+		switch_vmmEntry = 1;
+		if (switch_vmmEntry)
+			exchange_single_PTentry(new_hva, old_hva);
+		else
+			change_single_PTentry(new_hva, old_hva);
 #ifdef TIME_HYPERCALL_COMPACTION
 //		getnstimeofday64(&end);
 //		printk("[kvm] spte time:	%ld\n", calc_exec_time(start, mid));
@@ -5110,7 +5115,7 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 	int i;
 	static struct task_struct **entry_kth = NULL;
 	static struct arg_migPages_info_t *arg_migPages_info;
-	const int THREAD_NUM = 5;
+	const int THREAD_NUM = 1;
 	static int bInit = 1;
 #ifdef TIME_HYPERCALL_COMPACTION
 	struct timespec64 start, end;

@@ -1041,6 +1041,118 @@ void change_single_PTentry(unsigned long new_hva, unsigned long old_hva)
 }
 EXPORT_SYMBOL(change_single_PTentry);
 
+static void exchange_page_state_naoki(struct page *new_page, struct page *old_page)
+{
+	struct address_space *mapping;
+	void **pslot;
+
+	mapping = page_mapping(old_page);
+	if (!mapping) {
+		if (new_page->index != old_page->index) {
+	                //printk("[vmm] != index\n");
+	                old_page->index = new_page->index;
+	        }
+	        if (new_page->mapping != old_page->mapping) {
+			struct address_space *new_mapping;
+			new_mapping = page_mapping(new_page);
+	                printk("[vmm] != mapping\n");
+			printk("[vmm] new_mapping:%p\n", new_mapping);
+			/* old_spte !present */
+	                old_page->mapping = new_page->mapping;
+	        }
+	} else {
+		printk("[vmm] mapping old_page\n");
+		xa_lock_irq(&mapping->i_pages);
+		pslot = radix_tree_lookup_slot(&mapping->i_pages,
+				page_index(old_page));
+		if (new_page->index != old_page->index) {
+	                //printk("[vmm] != index\n");
+	                old_page->index = new_page->index;
+	        }
+	        if (new_page->mapping != old_page->mapping) {
+	 		printk("[vmm] != mapping\n");
+	                old_page->mapping = new_page->mapping;
+	        }
+		radix_tree_replace_slot(&mapping->i_pages, pslot, old_page);
+		xa_unlock(&mapping->i_pages);
+	}
+	if (PageSwapBacked(new_page)) {
+		if (!PageSwapBacked(old_page)) {
+			printk("[vmm] !old_page SwapBacked\n");
+			SetPageSwapBacked(old_page);
+		}
+	}
+}
+
+void exchange_single_PTentry(unsigned long new_hva, unsigned long old_hva)
+{
+	struct mm_struct *mm;
+	struct vm_area_struct *new_vma, *old_vma;
+	pmd_t *new_pmd, *old_pmd;
+	pte_t *new_pte, *old_pte;
+	pte_t _old_pte, _new_pte;
+	struct page *new_page, *old_page;
+	spinlock_t *new_pte_ptl, *old_pte_ptl;
+
+	mm = current->mm;
+	new_pte = walk_page_table(mm, new_hva, &new_pmd);
+	old_pte = walk_page_table(mm, old_hva, &old_pmd);
+	new_pte_ptl = pte_lockptr(mm, new_pmd);
+	old_pte_ptl = pte_lockptr(mm, old_pmd);
+	new_page = pte_page(*new_pte);
+	old_page = pte_page(*old_pte);
+//	lock_page(new_page);
+//	lock_page(old_page);
+	new_vma = find_vma(mm, new_hva);
+	old_vma = find_vma(mm, old_hva);
+	_old_pte = *old_pte;
+	_new_pte = *new_pte;
+
+	if (!pte_none(*new_pte)) {
+		if (old_page->mapping != new_page->mapping) {
+			printk("[VMM] !pte_none(new_pte) && != mapping\n");
+			old_page->mapping = 
+					(struct address_space *)(new_vma->anon_vma);
+			new_page->mapping = 
+					(struct address_space *)(old_vma->anon_vma);
+			old_page->index = linear_page_index(new_vma, new_hva);
+			new_page->index = linear_page_index(old_vma, old_hva);
+//			spin_lock(old_pte_ptl);
+			page_remove_rmap(old_page, false);
+			page_remove_rmap(new_page, false);
+			page_add_anon_rmap(old_page, new_vma, new_hva, false);
+			page_add_anon_rmap(new_page, old_vma, old_hva, false);
+//			spin_unlock(old_pte_ptl);
+		} else {
+			pgoff_t tmp_index;
+			tmp_index = old_page->index;
+			old_page->index = new_page->index;
+			new_page->index = tmp_index;
+		}
+		if (PageSwapBacked(new_page))
+				SetPageSwapBacked(old_page);
+		if (PageSwapBacked(old_page))
+				SetPageSwapBacked(new_page);
+		
+		pte_clear(new_vma->vm_mm, new_hva, new_pte);
+		pte_clear(old_vma->vm_mm, old_hva, old_pte);
+		set_pte_at(new_vma->vm_mm, new_hva, new_pte, _old_pte);
+		set_pte_at(new_vma->vm_mm, old_hva, old_pte, _new_pte);
+		update_mmu_cache(new_vma, new_hva, new_pte);
+		update_mmu_cache(old_vma, old_hva, old_pte);
+	} else {
+		printk("[VMM] pte_none(new_pte)\n");
+		old_page->index = linear_page_index(old_vma, new_hva);
+		pte_clear(old_vma->vm_mm, old_hva, old_pte);
+		set_pte_at(new_vma->vm_mm, new_hva, new_pte, _old_pte);
+		update_mmu_cache(new_vma, new_hva, new_pte);
+		update_mmu_cache(old_vma, old_hva, old_pte);
+	}
+
+	return;
+}
+EXPORT_SYMBOL(exchange_single_PTentry);
+
 static pte_t *walk_page_table(struct mm_struct *mm, unsigned long hva,
 				pmd_t **pmd)
 {
