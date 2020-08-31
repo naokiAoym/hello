@@ -5101,29 +5101,21 @@ static int exchange_single_copy_entry(struct kvm_vcpu *vcpu,
 		if (is_shadow_present_pte(*new_sptep)) {
 			_new_spte = *new_sptep;
 			drop_spte(vcpu->kvm, new_sptep);
-		} else {
-			mmu_spte_update(new_sptep, _old_spte);
-			if (is_shadow_present_pte(*new_sptep)) {
-				rmap_count = rmap_add(vcpu, new_sptep, new_gfn);
+			mmu_spte_update(old_sptep, _new_spte);
+			if (is_shadow_present_pte(*old_sptep)) {
+				rmap_count = rmap_add(vcpu, old_sptep, old_gfn);
 				if (rmap_count > RMAP_RECYCLE_THRESHOLD)
-					rmap_recycle(vcpu, new_sptep, new_gfn);
+					rmap_recycle(vcpu, old_sptep, old_gfn);
 			}
-			exchange_single_PTentry(new_hva, old_hva);
-			return 0;
 		}
 
 		mmu_spte_update(new_sptep, _old_spte);
-		mmu_spte_update(old_sptep, _new_spte);
 		if (is_shadow_present_pte(*new_sptep)) {
 			rmap_count = rmap_add(vcpu, new_sptep, new_gfn);
 			if (rmap_count > RMAP_RECYCLE_THRESHOLD)
 				rmap_recycle(vcpu, new_sptep, new_gfn);
 		}
-		if (is_shadow_present_pte(*old_sptep)) {
-			rmap_count = rmap_add(vcpu, old_sptep, old_gfn);
-			if (rmap_count > RMAP_RECYCLE_THRESHOLD)
-				rmap_recycle(vcpu, old_sptep, old_gfn);
-		}
+
 #ifdef TIME_HYPERCALL_COMPACTION
 //		getnstimeofday64(&mid);
 #endif
