@@ -5102,14 +5102,14 @@ static int exchange_single_copy_entry(struct kvm_vcpu *vcpu,
 			_new_spte = *new_sptep;
 			drop_spte(vcpu->kvm, new_sptep);
 		} else {
-			kvm_pfn_t new_pfn, old_pfn;
-
-			new_pfn = my_gfn_to_pfn(new_gfn, vcpu);
-			old_pfn = my_gfn_to_pfn(old_gfn, vcpu);
-
-			_new_spte = *old_sptep;
-			_new_spte = _new_spte - (old_pfn << PAGE_SHIFT)
-					+ (new_pfn << PAGE_SHIFT);
+			mmu_spte_update(new_sptep, _old_spte);
+			if (is_shadow_present_pte(*new_sptep)) {
+				rmap_count = rmap_add(vcpu, new_sptep, new_gfn);
+				if (rmap_count > RMAP_RECYCLE_THRESHOLD)
+					rmap_recycle(vcpu, new_sptep, new_gfn);
+			}
+			exchange_single_PTentry(new_hva, old_hva);
+			return 0;
 		}
 
 		mmu_spte_update(new_sptep, _old_spte);
