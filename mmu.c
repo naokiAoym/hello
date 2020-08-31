@@ -5039,11 +5039,95 @@ static int change_single_copy_entry(struct kvm_vcpu *vcpu,
 #ifdef TIME_HYPERCALL_COMPACTION
 //		getnstimeofday64(&mid);
 #endif
-		switch_vmmEntry = 1;
+		switch_vmmEntry = 0;
 		if (switch_vmmEntry)
 			exchange_single_PTentry(new_hva, old_hva);
 		else
 			change_single_PTentry(new_hva, old_hva);
+#ifdef TIME_HYPERCALL_COMPACTION
+//		getnstimeofday64(&end);
+//		printk("[kvm] spte time:	%ld\n", calc_exec_time(start, mid));
+//		printk("[kvm] kpte time:	%ld\n", calc_exec_time(mid, end));
+#endif
+
+		return 0;
+}
+
+static int exchange_single_copy_entry(struct kvm_vcpu *vcpu,
+		gfn_t new_gfn, gfn_t old_gfn)
+{
+		u64 *new_sptep, *old_sptep;
+		int new_level, old_level;
+		int rmap_count;
+		u64 _old_spte, _new_spte;
+		struct kvm_memory_slot *slot;
+		unsigned long new_hva, old_hva;
+#ifdef TIME_HYPERCALL_COMPACTION
+//		struct timespec64 start, mid, end;
+
+//		getnstimeofday64(&start);
+#endif
+
+		new_sptep = walk_EPTentry(vcpu, new_gfn, &new_level);
+		old_sptep = walk_EPTentry(vcpu, old_gfn, &old_level);
+
+		slot = kvm_vcpu_gfn_to_memslot(vcpu, new_gfn);
+		new_hva = slot->userspace_addr
+					+ (new_gfn - slot->base_gfn) * PAGE_SIZE;
+		slot = kvm_vcpu_gfn_to_memslot(vcpu, old_gfn);
+		old_hva = slot->userspace_addr
+					+ (old_gfn - slot->base_gfn) * PAGE_SIZE;
+
+		if (!is_shadow_present_pte(*old_sptep)) {
+			kvm_pfn_t new_pfn, old_pfn;
+
+			new_pfn = my_gfn_to_pfn(new_gfn, vcpu);
+			old_pfn = my_gfn_to_pfn(old_gfn, vcpu);
+
+			if (is_shadow_present_pte(*new_sptep)) {
+				_old_spte = *new_sptep;
+				_old_spte = _old_spte - (new_pfn << PAGE_SHIFT)
+					+ (old_pfn << PAGE_SHIFT);
+			} else {
+				printk("[EPT] new_sptep & old_sptep not present\n");
+				exchange_single_PTentry(new_hva, old_hva);
+				return 0;
+			}
+		} else {
+			_old_spte = *old_sptep;
+			drop_spte(vcpu->kvm, old_sptep);
+		}
+
+		if (is_shadow_present_pte(*new_sptep)) {
+			_new_spte = *new_sptep;
+			drop_spte(vcpu->kvm, new_sptep);
+		} else {
+			kvm_pfn_t new_pfn, old_pfn;
+
+			new_pfn = my_gfn_to_pfn(new_gfn, vcpu);
+			old_pfn = my_gfn_to_pfn(old_gfn, vcpu);
+
+			_new_spte = *old_sptep;
+			_new_spte = _new_spte - (old_pfn << PAGE_SHIFT)
+					+ (new_pfn << PAGE_SHIFT);
+		}
+
+		mmu_spte_update(new_sptep, _old_spte);
+		mmu_spte_update(old_sptep, _new_spte);
+		if (is_shadow_present_pte(*new_sptep)) {
+			rmap_count = rmap_add(vcpu, new_sptep, new_gfn);
+			if (rmap_count > RMAP_RECYCLE_THRESHOLD)
+				rmap_recycle(vcpu, new_sptep, new_gfn);
+		}
+		if (is_shadow_present_pte(*old_sptep)) {
+			rmap_count = rmap_add(vcpu, old_sptep, old_gfn);
+			if (rmap_count > RMAP_RECYCLE_THRESHOLD)
+				rmap_recycle(vcpu, old_sptep, old_gfn);
+		}
+#ifdef TIME_HYPERCALL_COMPACTION
+//		getnstimeofday64(&mid);
+#endif
+		exchange_single_PTentry(new_hva, old_hva);
 #ifdef TIME_HYPERCALL_COMPACTION
 //		getnstimeofday64(&end);
 //		printk("[kvm] spte time:	%ld\n", calc_exec_time(start, mid));
@@ -5070,6 +5154,7 @@ static int func_change_entry_each_th (void *arg)
 	int page_num;
 	struct arg_migPages_info_t *arg_migPages_info;
 	int i;
+	int switch_updateEntry;
 #ifdef TIME_HYPERCALL_COMPACTION
 //	struct timespec64 start, end;
 	int thread_no;
@@ -5089,8 +5174,12 @@ static int func_change_entry_each_th (void *arg)
 		old_gfn = arg_migPages_info->old_gfn;
 		page_num = arg_migPages_info->page_num;
 
+		switch_updateEntry = 1;
 		for (i = 0; i < page_num; i++) {
-			change_single_copy_entry(vcpu, new_gfn[i], old_gfn[i]);
+			if (switch_updateEntry) 
+				exchange_single_copy_entry(vcpu, new_gfn[i], old_gfn[i]);
+			else
+				change_single_copy_entry(vcpu, new_gfn[i], old_gfn[i]);
 		}
 
 		up(&arg_migPages_info->sem_th);
