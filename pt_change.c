@@ -1041,49 +1041,6 @@ void change_single_PTentry(unsigned long new_hva, unsigned long old_hva)
 }
 EXPORT_SYMBOL(change_single_PTentry);
 
-static void exchange_page_state_naoki(struct page *new_page, struct page *old_page)
-{
-	struct address_space *mapping;
-	void **pslot;
-
-	mapping = page_mapping(old_page);
-	if (!mapping) {
-		if (new_page->index != old_page->index) {
-	                //printk("[vmm] != index\n");
-	                old_page->index = new_page->index;
-	        }
-	        if (new_page->mapping != old_page->mapping) {
-			struct address_space *new_mapping;
-			new_mapping = page_mapping(new_page);
-	                printk("[vmm] != mapping\n");
-			printk("[vmm] new_mapping:%p\n", new_mapping);
-			/* old_spte !present */
-	                old_page->mapping = new_page->mapping;
-	        }
-	} else {
-		printk("[vmm] mapping old_page\n");
-		xa_lock_irq(&mapping->i_pages);
-		pslot = radix_tree_lookup_slot(&mapping->i_pages,
-				page_index(old_page));
-		if (new_page->index != old_page->index) {
-	                //printk("[vmm] != index\n");
-	                old_page->index = new_page->index;
-	        }
-	        if (new_page->mapping != old_page->mapping) {
-	 		printk("[vmm] != mapping\n");
-	                old_page->mapping = new_page->mapping;
-	        }
-		radix_tree_replace_slot(&mapping->i_pages, pslot, old_page);
-		xa_unlock(&mapping->i_pages);
-	}
-	if (PageSwapBacked(new_page)) {
-		if (!PageSwapBacked(old_page)) {
-			printk("[vmm] !old_page SwapBacked\n");
-			SetPageSwapBacked(old_page);
-		}
-	}
-}
-
 void exchange_single_PTentry(unsigned long new_hva, unsigned long old_hva)
 {
 	struct mm_struct *mm;

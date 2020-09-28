@@ -4932,7 +4932,7 @@ int change_copy_entry_naoki(struct kvm_vcpu *vcpu,
 //=============================================================
 // thread single entry proc
 //=============================================================
-#define MAX_CHANGE_ENTRY_NUM 512
+#define MAX_CHANGE_ENTRY_NUM 2048
 
 static int init_vmalloc_gfnArray(gfn_t **new_gfn, gfn_t **old_gfn)
 {
@@ -4963,21 +4963,24 @@ static void set_gfnArray_from_physMem(struct kvm_vcpu *vcpu,
 		unsigned long page_num)
 {
 	unsigned long array_gfn, array_offset;
+	int i;
 
 	array_gfn = arrayAddress >> PAGE_SHIFT;
 	array_offset = arrayAddress - (array_gfn << PAGE_SHIFT);
-
-	if (array_offset == 0) {
-		read_hypercall_array(vcpu, array_gfn, array_offset,
-								gfnArray, page_num);
-	} else {
-		int pivot = (PAGE_SIZE - array_offset) / sizeof(long);
-		printk("[KVM] offset over pivot:%d\n", pivot);
-		read_hypercall_array(vcpu, array_gfn, array_offset,
-								gfnArray, page_num);
-		if (page_num > pivot)
+	
+	for (i = 0; i < page_num; i += 512, array_gfn += 512) {
+		if (array_offset == 0) {
+			read_hypercall_array(vcpu, array_gfn + (i / 512),
+				       	array_offset, &gfnArray[i], 512);
+		} else {
+			int pivot = (PAGE_SIZE - array_offset) / sizeof(long);
+			printk("[KVM] offset over pivot:%d\n", pivot);
 			read_hypercall_array(vcpu, array_gfn, array_offset,
-									gfnArray, page_num - pivot);
+								gfnArray, page_num);
+			if (page_num > pivot)
+				read_hypercall_array(vcpu, array_gfn + 1, 0,
+							&gfnArray[pivot], page_num - pivot);
+		}
 	}
 }
 
@@ -5196,7 +5199,7 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 	int i;
 	static struct task_struct **entry_kth = NULL;
 	static struct arg_migPages_info_t *arg_migPages_info;
-	const int THREAD_NUM = 1;
+	const int THREAD_NUM = 5;
 	static int bInit = 1;
 #ifdef TIME_HYPERCALL_COMPACTION
 	struct timespec64 start, end;
