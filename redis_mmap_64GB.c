@@ -110,7 +110,7 @@ int getAccessKey(void)
 	}
 
 	r = genrand_int32() % 100;
-	if (r < 95) {
+	if (r < 10) {
 		do {
 			key = (int)rand_normal(key_rocal, 8);
 		} while (key < 0 || key >= SET_VALUE);
@@ -168,7 +168,7 @@ int main(void)
 	}
 	for (i = 1; i < MEMHOG_SIZE * 2; i += 2)
 		madvise(memhog[i], 4096, MADV_FREE);
-	
+
 	if (redis_thread_make(&pth_time, pthread_time_calc, c, rep))
 		return -1;
 	pthread_detach(pth_time);
@@ -182,7 +182,7 @@ int main(void)
 		geneRandString(str, VALUE_SIZE - 1);
 
 		pthread_mutex_lock(&redis_lock);
-		rep = redisCommand(c, "SET %d %s", key, str);
+		rep = redisCommand(c, "DEL %d", key);
 		pthread_mutex_unlock(&redis_lock);
 		if (checkReqCmdErr(c, rep))
 			return -1;
@@ -213,7 +213,7 @@ int main(void)
 			+ (end.tv_nsec - start.tv_nsec);
 	printf("%lld\n", acc_time);
 
-	pthread_join(pth_save, NULL);
+	//pthread_join(pth_save, NULL);
 	sleep(10);
 	rep = redisCommand(c, "flushall");
 	if (rep == NULL || rep->type == REDIS_REPLY_ERROR)
@@ -229,6 +229,7 @@ int main(void)
 		munmap(memhog[i], 4096);
 	}
 	free(memhog);
+
 	return 0;
 }
 
