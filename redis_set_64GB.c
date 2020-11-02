@@ -11,7 +11,7 @@
 #include "hiredis.h"
 #include "MT.h"
 
-#define SET_VALUE (10 * 32 * 1024)
+#define SET_VALUE (20 * 32 * 1024)
 #define VALUE_SIZE (32 * 1024)
 #define MEMHOG_SIZE (6 * 1024 * 1024)
 
@@ -123,7 +123,7 @@ int getAccessKey(void)
 
 int main(void)
 {
-	int i, j, t, k;
+	int i, j;
 	char str[VALUE_SIZE];
 	redisContext *c = redisConnect("127.0.0.1", 6379);
 	redisReply *rep = NULL;
@@ -141,16 +141,6 @@ int main(void)
 	pthread_mutex_init(&redis_lock, NULL);
 	srand((unsigned)time(NULL));
 	init_genrand((unsigned)time(NULL));
-	
-	for (i = 0; i < SET_VALUE; i++) {
-		geneRandString(str, VALUE_SIZE - 1);
-
-		pthread_mutex_lock(&redis_lock);
-		rep = redisCommand(c, "SET %d %s", i, str);
-		pthread_mutex_unlock(&redis_lock);
-		if (checkReqCmdErr(c, rep))
-			return -1;
-	}
 
 	if ((memhog = (int **)malloc(sizeof(int *) * MEMHOG_SIZE*2)) == NULL) {
 		printf("fail malloc memhog\n");
@@ -174,36 +164,16 @@ int main(void)
 	pthread_detach(pth_time);
 	//if (redis_thread_make(&pth_save, pthread_redis_save, c, rep))
 	//	return -1;
-	t = 0;
-	k = 0;
+
 	clock_gettime(CLOCK_REALTIME, &start);
-	for (i = 0; i < SET_VALUE*1; i++) {
-		int key = getAccessKey();
+	for (i = 0; i < SET_VALUE; i++) {
 		geneRandString(str, VALUE_SIZE - 1);
 
 		pthread_mutex_lock(&redis_lock);
-		rep = redisCommand(c, "DEL %d", key);
+		rep = redisCommand(c, "SET %d %s", i, str);
 		pthread_mutex_unlock(&redis_lock);
 		if (checkReqCmdErr(c, rep))
 			return -1;
-		if (k == 30000) {
-		        pthread_mutex_lock(&redis_lock);
-        		rep = redisCommand(c, "BGSAVE");
-        		pthread_mutex_unlock(&redis_lock);
-        		if (checkReqCmdErr(c, rep))
-        		        return 0;
-		}
-
-/*		if (k > 10000 && (t % 100) == 0) {
-			pthread_mutex_lock(&redis_lock);
-			rep = redisCommand(c, "DEL %d", key);
-			pthread_mutex_unlock(&redis_lock);
-			if (checkReqCmdErr(c, rep))
-				return -1;
-		}
-*/
-		t++;
-		k++;
 		count++;
 	}
 	clock_gettime(CLOCK_REALTIME, &end);
