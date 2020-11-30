@@ -1814,16 +1814,42 @@ static int copy_to_new_pages_concur(struct list_head *unmapped_list_ptr,
 	u64 timestamp;
 #endif
 	int page_count = 0;
-	static unsigned long *new_array = NULL;
-	static unsigned long *old_array = NULL;
-	int use_hypercall = 0;
-	if (use_hypercall) {
-		if (new_array == NULL)
-			new_array =
-			(unsigned long *)kmalloc(512*sizeof(unsigned long), GFP_KERNEL);
-		if (old_array == NULL)
-			old_array =
-			(unsigned long *)kmalloc(512*sizeof(unsigned long), GFP_KERNEL);
+	static unsigned long *new_parray = NULL, *old_parray = NULL;
+	static unsigned long **new_array = NULL;
+	static unsigned long **old_array = NULL;
+	int use_hypercall = 1;
+	static int bInit = 1;
+	static int batch_size = 16;
+	if (use_hypercall && bInit) {
+		int i;
+		new_array =
+			(unsigned long **)kmalloc(
+					batch_size * sizeof(unsigned long *), 
+								GFP_KERNEL);
+		old_array =
+			(unsigned long **)kmalloc(
+					batch_size * sizeof(unsigned long *),
+								GFP_KERNEL);
+		new_parray =
+			(unsigned long *)kmalloc(
+					batch_size * sizeof(unsigned long),
+								GFP_KERNEL);
+		old_parray =
+			(unsigned long *)kmalloc(
+					batch_size * sizeof(unsigned long),
+								GFP_KERNEL);
+		for (i = 0; i < batch_size; i++) {
+			new_array[i] =
+			(unsigned long *)kmalloc(512*sizeof(unsigned long),
+							GFP_KERNEL);
+			new_parray[i] = virt_to_phys(new_array[i]);
+			old_array[i] =
+			(unsigned long *)kmalloc(512*sizeof(unsigned long),
+							GFP_KERNEL);
+			old_parray[i] = virt_to_phys(old_array[i]);
+		}
+
+		bInit = 0;
 	}
 
 	if (list_empty(unmapped_list_ptr))
@@ -1862,8 +1888,8 @@ static int copy_to_new_pages_concur(struct list_head *unmapped_list_ptr,
 
 
 	if (rc) {
-		if (!use_hypercall)
-			getnstimeofday64(&start);
+//		if (!use_hypercall)
+//			getnstimeofday64(&start);
 		list_for_each_entry(iterator, unmapped_list_ptr, list) {
 			if (PageHuge(iterator->old_page) ||
 				PageTransHuge(iterator->old_page)) {
@@ -1871,22 +1897,29 @@ static int copy_to_new_pages_concur(struct list_head *unmapped_list_ptr,
 				copy_huge_page(iterator->new_page, iterator->old_page);
 			} else {
 				if (new_array != NULL && old_array != NULL) {
-					new_array[page_count] = page_to_pfn(iterator->new_page);
-					old_array[page_count] = page_to_pfn(iterator->old_page);
+					int i = page_count;
+					new_array[i/512][i%512] = 
+						page_to_pfn(iterator->new_page);
+					old_array[i/512][i%512] = 
+						page_to_pfn(iterator->old_page);
 					//page_count++;
 				} else {
 					//printk("[comp] array null\n");
 					copy_highpage(iterator->new_page, iterator->old_page);
+					//kvm_hypercall1(53, page_to_pfn(iterator->old_page));
 				}
 				page_count++;
 			}
 		}
-		if (!use_hypercall)
-			getnstimeofday64(&end);
-		else
-			getnstimeofday64(&start);
+		if (!use_hypercall) {
+//			getnstimeofday64(&end);
+			//kvm_hypercall0(52);
+		} else {
+//			getnstimeofday64(&start);
+		}
 		if (new_array != NULL && old_array != NULL) {
-			if (kvm_hypercall3(26, virt_to_phys(new_array), virt_to_phys(old_array), page_count)) {
+			if (page_count > 32) {
+			if (kvm_hypercall3(27, virt_to_phys(new_parray), virt_to_phys(old_parray), page_count)) {
 				printk("fail hypercall compaction\n");
 				list_for_each_entry(iterator, unmapped_list_ptr, list)
 					if (!PageHuge(iterator->old_page)
@@ -1894,16 +1927,28 @@ static int copy_to_new_pages_concur(struct list_head *unmapped_list_ptr,
 					copy_highpage(iterator->new_page, iterator->old_page);
 				bFail_hypercall = 1;
 			}
+			} else {
+				list_for_each_entry(iterator, 
+						unmapped_list_ptr, list) {
+				if (PageHuge(iterator->old_page) 
+					|| PageTransHuge(iterator->old_page))
+					copy_huge_page(iterator->new_page,
+							iterator->old_page);
+				else
+					copy_highpage(iterator->new_page,
+							iterator->old_page);
+				}
+			}
 			//kfree(new_array);
 			//kfree(old_array);
 		}
-		if (use_hypercall)
-			getnstimeofday64(&end);
-		copy_time = (end.tv_sec - start.tv_sec) * NSEC_PER_SEC
-			+ (end.tv_nsec - start.tv_nsec);
-		if (!bFail_hypercall)
-			printk("[compaction] migration(%d):	%lld\n",
-                        	                page_count, copy_time);
+//		if (use_hypercall)
+//			getnstimeofday64(&end);
+//		copy_time = (end.tv_sec - start.tv_sec) * NSEC_PER_SEC
+//			+ (end.tv_nsec - start.tv_nsec);
+//		if (!bFail_hypercall)
+//			printk("[compaction] migration(%d):	%lld\n",
+  //                      	                page_count, copy_time);
 	}
 
 	list_for_each_entry(iterator, unmapped_list_ptr, list) {

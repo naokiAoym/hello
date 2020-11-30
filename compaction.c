@@ -894,14 +894,15 @@ isolate_success:
 			cc->last_migrated_pfn = low_pfn;
 
 		/* Avoid isolating too much */
-		if (cc->nr_migratepages == COMPACT_CLUSTER_MAX) {
+		//if (cc->nr_migratepages == COMPACT_CLUSTER_MAX) {
+		if ((cc->nr_migratepages % COMPACT_CLUSTER_MAX) == 0) {
 			++low_pfn;
 			break;
 		}
 
 		continue;
 isolate_fail:
-		if (!skip_on_failure)
+//		if (!skip_on_failure)
 			continue;
 
 		/*
@@ -1231,6 +1232,7 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 	const isolate_mode_t isolate_mode =
 		(sysctl_compact_unevictable_allowed ? ISOLATE_UNEVICTABLE : 0) |
 		(cc->mode != MIGRATE_SYNC ? ISOLATE_ASYNC_MIGRATE : 0);
+	int loop_count = 0;
 
 	/*
 	 * Start at where we last stopped, or beginning of the zone as
@@ -1291,7 +1293,9 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 		 * we failed and compact_zone should decide if we should
 		 * continue or not.
 		 */
-		break;
+		//break;
+		loop_count++;
+		if (loop_count >= 4) break; 
 	}
 
 	/* Record where migration scanner will be restarted. */
@@ -1594,7 +1598,7 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 		int err;
 		struct page *page, *page2;
 		int mnum = 0;
-		//static int mnum_sum = 0, buf_sum = 0;
+		static int mnum_sum = 0, buf_sum = 0;
 		int use_batch_compaction = 0;
 		//unsigned long long compact_time;
 		//struct timespec64 start, end;
@@ -1616,20 +1620,20 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 		case ISOLATE_SUCCESS:
 			;
 		}
-list_for_each_entry_safe(page, page2, &cc->migratepages, lru) {
-		//	printk("migrate page:%p\n", page);
+/*		list_for_each_entry_safe(page, page2, &cc->migratepages, lru) {
 			mnum++;
 		}
-		//mnum_sum += mnum;
-		//printk("[compaction] page compaction (%d), sum:%d\n",
-		//		mnum, mnum_sum);
+		mnum_sum += mnum;
+		printk("[compaction] page compaction (%d), sum:%d\n",
+				mnum, mnum_sum);
+*/
 /*		if ((mnum_sum / 10000) != buf_sum) {
 			printk("[compaction] page compaction (%d), sum:%d\n",
 				mnum, mnum_sum);
 			buf_sum = mnum_sum / 10000;
 		}
 */
-		use_batch_compaction = 0;
+		use_batch_compaction = 1;
 		//start_mig = rdtsc();
 		//getnstimeofday64(&start);
 		if (use_batch_compaction)
