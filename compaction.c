@@ -1232,6 +1232,85 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 	const isolate_mode_t isolate_mode =
 		(sysctl_compact_unevictable_allowed ? ISOLATE_UNEVICTABLE : 0) |
 		(cc->mode != MIGRATE_SYNC ? ISOLATE_ASYNC_MIGRATE : 0);
+
+	/*
+	 * Start at where we last stopped, or beginning of the zone as
+	 * initialized by compact_zone()
+	 */
+	low_pfn = cc->migrate_pfn;
+	block_start_pfn = pageblock_start_pfn(low_pfn);
+	if (block_start_pfn < zone->zone_start_pfn)
+		block_start_pfn = zone->zone_start_pfn;
+
+	/* Only scan within a pageblock boundary */
+	block_end_pfn = pageblock_end_pfn(low_pfn);
+
+	/*
+	 * Iterate over whole pageblocks until we find the first suitable.
+	 * Do not cross the free scanner.
+	 */
+	for (; block_end_pfn <= cc->free_pfn;
+			low_pfn = block_end_pfn,
+			block_start_pfn = block_end_pfn,
+			block_end_pfn += pageblock_nr_pages) {
+
+		/*
+		 * This can potentially iterate a massively long zone with
+		 * many pageblocks unsuitable, so periodically check if we
+		 * need to schedule, or even abort async compaction.
+		 */
+		if (!(low_pfn % (SWAP_CLUSTER_MAX * pageblock_nr_pages))
+						&& compact_should_abort(cc))
+			break;
+
+		page = pageblock_pfn_to_page(block_start_pfn, block_end_pfn,
+									zone);
+		if (!page)
+			continue;
+
+		/* If isolation recently failed, do not retry */
+		if (!isolation_suitable(cc, page))
+			continue;
+
+		/*
+		 * For async compaction, also only scan in MOVABLE blocks.
+		 * Async compaction is optimistic to see if the minimum amount
+		 * of work satisfies the allocation.
+		 */
+		if (!suitable_migration_source(cc, page))
+			continue;
+
+		/* Perform the isolation */
+		low_pfn = isolate_migratepages_block(cc, low_pfn,
+						block_end_pfn, isolate_mode);
+
+		if (!low_pfn || cc->contended)
+			return ISOLATE_ABORT;
+
+		/*
+		 * Either we isolated something and proceed with migration. Or
+		 * we failed and compact_zone should decide if we should
+		 * continue or not.
+		 */
+		break;
+	}
+
+	/* Record where migration scanner will be restarted. */
+	cc->migrate_pfn = low_pfn;
+
+	return cc->nr_migratepages ? ISOLATE_SUCCESS : ISOLATE_NONE;
+}
+
+static isolate_migrate_t isolate_migratepages_batch(struct zone *zone,
+					struct compact_control *cc)
+{
+	unsigned long block_start_pfn;
+	unsigned long block_end_pfn;
+	unsigned long low_pfn;
+	struct page *page;
+	const isolate_mode_t isolate_mode =
+		(sysctl_compact_unevictable_allowed ? ISOLATE_UNEVICTABLE : 0) |
+		(cc->mode != MIGRATE_SYNC ? ISOLATE_ASYNC_MIGRATE : 0);
 	int loop_count = 0;
 
 	/*
@@ -1537,12 +1616,178 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 	return false;
 }
 
+struct arg_asyncComp_t {
+	struct mm_struct *mm;
+	struct zone zone;
+	struct compact_control cc;
+	struct spinlock_t kth_lock;
+};
+
+static int func_asyncComp_th(void *arg)
+{
+	sturct arg_asyncComp_t arg_asyncComp;
+	struct zone *zone;
+	struct compact_control *cc;
+
+	arg_asyncComp = (struct arg_asyncComp_t *)arg;
+	current->mm = arg->mm;
+	zone = &arg_asyncComp->zone;
+	cc = &arg_asyncComp->cc;
+	spin_lock(&arg_asyncComp.kth_lock);
+
+	while ((ret = compact_finished(zone, cc)) == COMPACT_CONTINUE) {
+		int err;
+		struct page *page, *page2;
+		int mnum = 0;
+		static int mnum_sum = 0, buf_sum = 0;
+		int use_batch_compaction = 0;
+		//unsigned long long compact_time;
+		//struct timespec64 start, end;
+		int i;
+
+		switch (isolate_migratepages_batch(zone, cc)) {
+		case ISOLATE_ABORT:
+			ret = COMPACT_CONTENDED;
+			putback_movable_pages(&cc->migratepages);
+			cc->nr_migratepages = 0;
+			goto out;
+		case ISOLATE_NONE:
+			/*
+			 * We haven't isolated and migrated anything, but
+			 * there might still be unflushed migrations from
+			 * previous cc->order aligned block.
+			 */
+			goto check_drain;
+		case ISOLATE_SUCCESS:
+			;
+		}
+/*		list_for_each_entry_safe(page, page2, &cc->migratepages, lru) {
+			mnum++;
+		}
+		mnum_sum += mnum;
+		printk("[compaction] page compaction (%d), sum:%d\n",
+				mnum, mnum_sum);
+*/
+/*		if ((mnum_sum / 10000) != buf_sum) {
+			printk("[compaction] page compaction (%d), sum:%d\n",
+				mnum, mnum_sum);
+			buf_sum = mnum_sum / 10000;
+		}
+*/
+		use_batch_compaction = 1;
+		//start_mig = rdtsc();
+		//getnstimeofday64(&start);
+		if (use_batch_compaction)
+			err = migrate_pages_batch(&cc->migratepages, 
+				compaction_alloc, compaction_free,
+				(unsigned long)cc, cc->mode,
+				MR_COMPACTION);
+		else
+			err = migrate_pages(&cc->migratepages, compaction_alloc,
+				compaction_free, (unsigned long)cc, cc->mode,
+				MR_COMPACTION);
+		//getnstimeofday64(&end);
+		//end_mig = rdtsc();
+		//compact_time = (end.tv_sec - start.tv_sec) * NSEC_PER_SEC
+		//	+ (end.tv_nsec - start.tv_nsec);
+		//printk("[compaction] migration(%d):	%lld\n",
+		//			mnum, compact_time);
+
+//		if (err) printk("[compaction] migrate err\n");
+
+		trace_mm_compaction_migratepages(cc->nr_migratepages, err,
+							&cc->migratepages);
+
+		/* All pages were either migrated or will be released */
+		cc->nr_migratepages = 0;
+		if (err) {
+			putback_movable_pages(&cc->migratepages);
+			/*
+			 * migrate_pages() may return -ENOMEM when scanners meet
+			 * and we want compact_finished() to detect it
+			 */
+			if (err == -ENOMEM && !compact_scanners_met(cc)) {
+				ret = COMPACT_CONTENDED;
+				goto out;
+			}
+			/*
+			 * We failed to migrate at least one page in the current
+			 * order-aligned block, so skip the rest of it.
+			 */
+			if (cc->direct_compaction &&
+						(cc->mode == MIGRATE_ASYNC)) {
+				cc->migrate_pfn = block_end_pfn(
+						cc->migrate_pfn - 1, cc->order);
+				/* Draining pcplists is useless in this case */
+				cc->last_migrated_pfn = 0;
+
+			}
+		}
+
+check_drain:
+		/*
+		 * Has the migration scanner moved away from the previous
+		 * cc->order aligned block where we migrated from? If yes,
+		 * flush the pages that were freed, so that they can merge and
+		 * compact_finished() can detect immediately if allocation
+		 * would succeed.
+		 */
+		if (cc->order > 0 && cc->last_migrated_pfn) {
+			int cpu;
+			unsigned long current_block_start =
+				block_start_pfn(cc->migrate_pfn, cc->order);
+
+			if (cc->last_migrated_pfn < current_block_start) {
+				cpu = get_cpu();
+				lru_add_drain_cpu(cpu);
+				drain_local_pages(zone);
+				put_cpu();
+				/* No more flushing until we migrate again */
+				cc->last_migrated_pfn = 0;
+			}
+		}
+	}
+
+out:
+	/*
+	 * Release free pages and update where the free scanner should restart,
+	 * so we don't leave any returned pages behind in the next attempt.
+	 */
+	if (cc->nr_freepages > 0) {
+		unsigned long free_pfn = release_freepages(&cc->freepages);
+
+		cc->nr_freepages = 0;
+		VM_BUG_ON(free_pfn == 0);
+		/* The cached pfn is always the first in a pageblock */
+		free_pfn = pageblock_start_pfn(free_pfn);
+		/*
+		 * Only go back, not forward. The cached pfn might have been
+		 * already reset to zone end in compact_finished()
+		 */
+		if (free_pfn > zone->compact_cached_free_pfn)
+			zone->compact_cached_free_pfn = free_pfn;
+	}
+
+	spin_unlock(&arg_asyncComp.kth_lock);
+	return 0;
+}
+
 static enum compact_result compact_zone(struct zone *zone, struct compact_control *cc)
 {
 	enum compact_result ret;
 	unsigned long start_pfn = zone->zone_start_pfn;
 	unsigned long end_pfn = zone_end_pfn(zone);
 	const bool sync = cc->mode != MIGRATE_ASYNC;
+	static struct task_struct **asyncComp_kth = NULL;
+	static struct arg_asyncComp_t arg_asyncComp;
+	static int bInit = 0;
+
+	if (!bInit) {
+		spin_lock_init(arg_asyncComp.kth_lock);
+		bInit = 1;
+	}
+	spin_lock(&arg_asyncComp.kth_lock);
+	spin_unlock(&arg_asyncComp.kth_lock);
 
 	cc->migratetype = gfpflags_to_migratetype(cc->gfp_mask);
 	ret = compaction_suitable(zone, cc->order, cc->alloc_flags,
@@ -1706,6 +1951,16 @@ check_drain:
 			}
 		}
 
+		if ((ret = compact_finished(zone, cc)) == COMPACT_CONTINUE) {
+			arg_asyncComp.mm = current->mm;
+			arg_asyncComp.zone = *zone;
+			arg_asyncComp.cc = *cc;
+			
+			asyncComp_kth = kthread_run(func_asyncComp_th,
+								&arg_asyncComp, "asyncComp_kth");
+			if (IS_ERR(asyncComp_kth))
+				printk("[Compaction] err asyncComp_kth\n");
+		}
 	}
 
 out:
@@ -1713,20 +1968,21 @@ out:
 	 * Release free pages and update where the free scanner should restart,
 	 * so we don't leave any returned pages behind in the next attempt.
 	 */
-	if (cc->nr_freepages > 0) {
+/*	if (cc->nr_freepages > 0) {
 		unsigned long free_pfn = release_freepages(&cc->freepages);
 
 		cc->nr_freepages = 0;
 		VM_BUG_ON(free_pfn == 0);
-		/* The cached pfn is always the first in a pageblock */
+		// The cached pfn is always the first in a pageblock 
 		free_pfn = pageblock_start_pfn(free_pfn);
-		/*
-		 * Only go back, not forward. The cached pfn might have been
-		 * already reset to zone end in compact_finished()
-		 */
+		//
+		// Only go back, not forward. The cached pfn might have been
+		// already reset to zone end in compact_finished()
+		//
 		if (free_pfn > zone->compact_cached_free_pfn)
 			zone->compact_cached_free_pfn = free_pfn;
 	}
+*/
 
 	count_compact_events(COMPACTMIGRATE_SCANNED, cc->total_migrate_scanned);
 	count_compact_events(COMPACTFREE_SCANNED, cc->total_free_scanned);
