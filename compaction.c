@@ -1620,20 +1620,28 @@ struct arg_asyncComp_t {
 	struct mm_struct *mm;
 	struct zone zone;
 	struct compact_control cc;
-	struct spinlock_t kth_lock;
+	spinlock_t kth_lock;
 };
 
 static int func_asyncComp_th(void *arg)
-{
-	sturct arg_asyncComp_t arg_asyncComp;
+{	
+	struct arg_asyncComp_t *arg_asyncComp;
 	struct zone *zone;
 	struct compact_control *cc;
 
+	enum compact_result ret;
+	unsigned long start_pfn = zone->zone_start_pfn;
+	unsigned long end_pfn = zone_end_pfn(zone);
+	const bool sync = cc->mode != MIGRATE_ASYNC;
+
 	arg_asyncComp = (struct arg_asyncComp_t *)arg;
-	current->mm = arg->mm;
+	current->mm = arg_asyncComp->mm;
 	zone = &arg_asyncComp->zone;
 	cc = &arg_asyncComp->cc;
-	spin_lock(&arg_asyncComp.kth_lock);
+	spin_lock(&arg_asyncComp->kth_lock);
+	printk("[compaction] func_arg_asyncComp_th\n");
+	spin_unlock(&arg_asyncComp->kth_lock);
+	return 0;
 
 	while ((ret = compact_finished(zone, cc)) == COMPACT_CONTINUE) {
 		int err;
@@ -1768,7 +1776,7 @@ out:
 			zone->compact_cached_free_pfn = free_pfn;
 	}
 
-	spin_unlock(&arg_asyncComp.kth_lock);
+	spin_unlock(&arg_asyncComp->kth_lock);
 	return 0;
 }
 
@@ -1778,12 +1786,12 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 	unsigned long start_pfn = zone->zone_start_pfn;
 	unsigned long end_pfn = zone_end_pfn(zone);
 	const bool sync = cc->mode != MIGRATE_ASYNC;
-	static struct task_struct **asyncComp_kth = NULL;
+	static struct task_struct *asyncComp_kth = NULL;
 	static struct arg_asyncComp_t arg_asyncComp;
 	static int bInit = 0;
 
 	if (!bInit) {
-		spin_lock_init(arg_asyncComp.kth_lock);
+		spin_lock_init(&arg_asyncComp.kth_lock);
 		bInit = 1;
 	}
 	spin_lock(&arg_asyncComp.kth_lock);
@@ -1957,7 +1965,7 @@ check_drain:
 			arg_asyncComp.cc = *cc;
 			
 			asyncComp_kth = kthread_run(func_asyncComp_th,
-								&arg_asyncComp, "asyncComp_kth");
+						&arg_asyncComp, "asyncComp_kth");
 			if (IS_ERR(asyncComp_kth))
 				printk("[Compaction] err asyncComp_kth\n");
 		}
