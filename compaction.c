@@ -1616,10 +1616,36 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 	return false;
 }
 
+struct compact_control_naoki {
+	struct list_head freepages;	/* List of free pages to migrate to */
+	struct list_head migratepages;	/* List of pages being migrated */
+	struct zone *zone;
+	unsigned long nr_freepages;	/* Number of isolated free pages */
+	unsigned long nr_migratepages;	/* Number of pages to migrate */
+	unsigned long total_migrate_scanned;
+	unsigned long total_free_scanned;
+	unsigned long free_pfn;		/* isolate_freepages search base */
+	unsigned long migrate_pfn;	/* isolate_migratepages search base */
+	unsigned long last_migrated_pfn;/* Not yet flushed page being freed */
+	gfp_t gfp_mask;		/* gfp mask of a direct compactor */
+	int order;			/* order a direct compactor needs */
+	int migratetype;		/* migratetype of direct compactor */
+	unsigned int alloc_flags;	/* alloc flags of a direct compactor */
+	int classzone_idx;	/* zone index of a direct compactor */
+	enum migrate_mode mode;		/* Async or sync migration mode */
+	bool ignore_skip_hint;		/* Scan blocks even if marked skip */
+	bool no_set_skip_hint;		/* Don't mark blocks for skipping */
+	bool ignore_block_suitable;	/* Scan blocks considered unsuitable */
+	bool direct_compaction;		/* False from kcompactd or /proc/... */
+	bool whole_zone;		/* Whole zone should/has been scanned */
+	bool contended;			/* Signal lock or sched contention */
+	bool finishing_block;		/* Finishing current pageblock */
+};
+
 struct arg_asyncComp_t {
 	struct mm_struct *mm;
 	struct zone zone;
-	struct compact_control cc;
+	struct compact_control_naoki cc;
 	spinlock_t kth_lock;
 };
 
@@ -1962,7 +1988,7 @@ check_drain:
 		if ((ret = compact_finished(zone, cc)) == COMPACT_CONTINUE) {
 			arg_asyncComp.mm = current->mm;
 			arg_asyncComp.zone = *zone;
-			arg_asyncComp.cc = *cc;
+			arg_asyncComp.cc = (struct compact_control_naoki)*cc;
 			
 			asyncComp_kth = kthread_run(func_asyncComp_th,
 						&arg_asyncComp, "asyncComp_kth");
@@ -1976,7 +2002,7 @@ out:
 	 * Release free pages and update where the free scanner should restart,
 	 * so we don't leave any returned pages behind in the next attempt.
 	 */
-/*	if (cc->nr_freepages > 0) {
+	if (cc->nr_freepages > 0) {
 		unsigned long free_pfn = release_freepages(&cc->freepages);
 
 		cc->nr_freepages = 0;
@@ -1990,7 +2016,6 @@ out:
 		if (free_pfn > zone->compact_cached_free_pfn)
 			zone->compact_cached_free_pfn = free_pfn;
 	}
-*/
 
 	count_compact_events(COMPACTMIGRATE_SCANNED, cc->total_migrate_scanned);
 	count_compact_events(COMPACTFREE_SCANNED, cc->total_free_scanned);
