@@ -5,7 +5,7 @@
 #include <sys/types.h>
 
 #define MEMHOG_SIZE (14 * 1024 * 1024)
-#define FMI (10)
+#define FMI (2)
 int main(void)
 {
     int i;
@@ -28,9 +28,10 @@ int main(void)
 		madvise(memhog[i], 4096, MADV_NOHUGEPAGE);
 	}
 	for (i = 1; i < MEMHOG_SIZE; i += FMI)
-		madvise(memhog[i], 4096, MADV_FREE);
+		madvise(memhog[i], 4096, MADV_DONTNEED);
 
-    sleep(900)
+    printf("memhog finish!\n");
+    sleep(900);
 
     return 0;
 }
