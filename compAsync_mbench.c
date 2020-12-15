@@ -9,7 +9,7 @@
 #define MEMHOG_SIZE (14 * 1024 * 1024)
 #define ARRAY_SIZE (28 * 1024)
 #define FMI (2)
-#define LOOP_MAX 10
+#define LOOP_MAX 1000
 
 static unsigned long count = 0;
 static int bFinish = 0;
@@ -38,7 +38,7 @@ int main(void)
 	pthread_t pth_time;
 
 	if (pthread_create(&pth_time, NULL, pthread_time_calc, NULL)) {
-		printf("fail thread_make")
+		printf("fail thread_make");
 		return -1;
 	}
 	pthread_detach(pth_time);
@@ -84,17 +84,23 @@ int main(void)
 	printf("%lld\n", acc_time);
 
 	for (i = 0; i < MEMHOG_SIZE; i++) {
-		if (memhog[i][0] != i)
-			printf("!memhog[%d] = %d\n", i, memhog[i][0]);
 		munmap(memhog[i], 4096);
 	}
 	free(memhog);
 
+	for (i = 0; i < ARRAY_SIZE; i++) {
+		madvise(pArray[i], 2*1024*1024, MADV_HUGEPAGE);
+	}
+
 	for (loop = 0; loop < LOOP_MAX; loop++) {
 		for (i = 0; i < ARRAY_SIZE; i++)
-			for (j = 0; j < (2 * 1024* 1024) / sizeof(int); j += 4096)
-				pArray[i][j] = i+j+k;
+			for (j = 0; j < (2 * 1024* 1024) / sizeof(int); j += 4096){
+				count++;
+				pArray[i][j] = i+j+loop;
+
+		}
 	}
+	bFinish = 1;
 
 	for (i = 0; i < ARRAY_SIZE; i++) {
 		munmap(pArray[i], 2 * 1024 * 1024);
