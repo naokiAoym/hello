@@ -4932,7 +4932,7 @@ int change_copy_entry_naoki(struct kvm_vcpu *vcpu,
 //=============================================================
 // thread single entry proc
 //=============================================================
-#define MAX_CHANGE_ENTRY_NUM 2048
+#define MAX_CHANGE_ENTRY_NUM (32 * 512)
 
 static int init_vmalloc_gfnArray(gfn_t **new_gfn, gfn_t **old_gfn)
 {
@@ -4972,7 +4972,7 @@ static void set_gfnArray_from_physMem(struct kvm_vcpu *vcpu,
 			       	array_offset, gfnArray, page_num);
 	} else {
 		int pivot = (PAGE_SIZE - array_offset) / sizeof(long);
-		printk("[KVM] offset over pivot:%d\n", pivot);
+		//printk("[KVM] offset over pivot:%d\n", pivot);
 		read_hypercall_array(vcpu, array_gfn, array_offset,
 							gfnArray, page_num);
 		if (page_num > pivot)
@@ -5081,6 +5081,7 @@ static int exchange_single_copy_entry(struct kvm_vcpu *vcpu,
 		if (!is_shadow_present_pte(*old_sptep)) {
 			kvm_pfn_t new_pfn, old_pfn;
 
+			//printk("[kvm] old_spte:%llx (%p)\n", *old_sptep, old_sptep);
 			new_pfn = my_gfn_to_pfn(new_gfn, vcpu);
 			old_pfn = my_gfn_to_pfn(old_gfn, vcpu);
 
@@ -5187,13 +5188,13 @@ static int func_change_entry_each_th (void *arg)
 	return 0;
 }
 
-static int init_vmalloc_gfnPoArray(gfn_t **new_pgfn, gfn_t **old_pgfn)
+static int init_vmalloc_gfnPoArray(gfn_t **new_pgfn, gfn_t **old_pgfn, int size)
 {
 	static int bInit = 1;
 
 	if (bInit) {
-		*new_pgfn = (gfn_t *)vmalloc(sizeof(gfn_t) * 32);
-		*old_pgfn = (gfn_t *)vmalloc(sizeof(gfn_t) * 32);
+		*new_pgfn = (gfn_t *)vmalloc(sizeof(gfn_t) * size);
+		*old_pgfn = (gfn_t *)vmalloc(sizeof(gfn_t) * size);
 		bInit = 0;
 	}
 	if (!*new_pgfn) {
@@ -5218,7 +5219,8 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 	int i;
 	static struct task_struct **entry_kth = NULL;
 	static struct arg_migPages_info_t *arg_migPages_info;
-	const int THREAD_NUM = 5;
+	const int THREAD_NUM = 6;
+	const int COMPACTION_LOOP = 16;
 	static int bInit = 1;
 #ifdef TIME_HYPERCALL_COMPACTION
 	struct timespec64 start, end;
@@ -5236,7 +5238,7 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 		return -1;
 	}
 
-	if (init_vmalloc_gfnPoArray(&new_pgfn, &old_pgfn)) {
+	if (init_vmalloc_gfnPoArray(&new_pgfn, &old_pgfn, COMPACTION_LOOP)) {
 		printk("[KVM] !init_vmalloc_gfnPoArray\n");
 		return -1;
 	}
@@ -5263,17 +5265,16 @@ int change_copy_entry_each_naoki(struct kvm_vcpu *vcpu,
 	down_write(&mm->mmap_sem);
 	spin_lock(&vcpu->kvm->mmu_lock);
 
-	set_gfnArray_from_physMem(vcpu, old_pgfn, oldArray, 32);
-	set_gfnArray_from_physMem(vcpu, new_pgfn, newArray, 32);
-	for (i = 0; i*512 < page_num; i++) {
+	set_gfnArray_from_physMem(vcpu, old_pgfn, oldArray, COMPACTION_LOOP);
+	set_gfnArray_from_physMem(vcpu, new_pgfn, newArray, COMPACTION_LOOP);
+	for (i = 0; i < COMPACTION_LOOP; i++) {
 		unsigned long oldPoArray, newPoArray;
 		oldPoArray = old_pgfn[i];
 		newPoArray = new_pgfn[i];
-		printk("[kvm] oldPoArray=%lx, newPoArray=%lx\n",
-								oldPoArray, newPoArray);
 		set_gfnArray_from_physMem(vcpu, &old_gfn[i*512], oldPoArray, 512);
 		set_gfnArray_from_physMem(vcpu, &new_gfn[i*512], newPoArray, 512);
 	}
+	//printk("[kvm] page_num:%lx\n", page_num);
 
 	for (i = 0; i < THREAD_NUM; i++) {
 		int pivot  = page_num / THREAD_NUM;
