@@ -1,0 +1,1 @@
+Jan 24 06:32:43 naoki-vm kernel: [  131.985770] [compaction] migration(512):	26941

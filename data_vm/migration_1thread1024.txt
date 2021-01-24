@@ -1,0 +1,4 @@
+Jan 24 08:49:20 naoki-vm kernel: [  121.978438] [compaction] migration(1024):	273890
+Jan 24 08:49:20 naoki-vm kernel: [  122.445107] [compaction] migration(1024):	287103
+Jan 24 08:49:21 naoki-vm kernel: [  123.441616] [compaction] migration(1024):	302682
+Jan 24 08:49:22 naoki-vm kernel: [  124.046933] [compaction] migration(1024):	274613

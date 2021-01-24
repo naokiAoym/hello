@@ -1,0 +1,10 @@
+Jan 24 10:21:21 naoki-vm kernel: [  126.664214] [compaction] migration(2048):	428558
+Jan 24 10:21:26 naoki-vm kernel: [  132.226980] [compaction] migration(2048):	393510
+Jan 24 10:21:40 naoki-vm kernel: [  145.893540] [compaction] migration(2048):	398601
+Jan 24 10:21:40 naoki-vm kernel: [  146.118878] [compaction] migration(2048):	394106
+Jan 24 10:21:40 naoki-vm kernel: [  146.177540] [compaction] migration(2048):	394577
+Jan 24 10:21:40 naoki-vm kernel: [  146.228688] [compaction] migration(2048):	361906
+Jan 24 10:21:40 naoki-vm kernel: [  146.233192] [compaction] migration(2048):	417823
+Jan 24 10:21:40 naoki-vm kernel: [  146.237664] [compaction] migration(2048):	362383
+Jan 24 10:21:40 naoki-vm kernel: [  146.242123] [compaction] migration(2048):	379703
+Jan 24 10:21:40 naoki-vm kernel: [  146.246592] [compaction] migration(2048):	403213
